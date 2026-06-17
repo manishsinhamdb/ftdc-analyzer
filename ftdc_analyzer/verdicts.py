@@ -14,6 +14,7 @@ import numpy as np
 
 from ftdc_analyzer import metrics
 from ftdc_analyzer import decoder
+from ftdc_analyzer import signatures
 
 # ---------------------------------------------------------------------------
 # Units + summary stats
@@ -784,6 +785,7 @@ def build_results(dirpath, on_skip=None):
     # extra insights (version EOL + latency↔sharding correlation) + cost optimization
     insights = insights + build_extra_insights(sig, sig_stats, facts)
     cost_optimization = build_cost_optimization(verdicts)
+    assessment = signatures.build_assessment(sig_stats, insights, cost_optimization)
 
     results = {
         "schema_version": 3,
@@ -797,6 +799,7 @@ def build_results(dirpath, on_skip=None):
         "capture": {"first_ts_iso": first_iso, "last_ts_iso": last_iso,
                     "span_seconds": span_seconds, "samples": n},
         "signals": signals_block,
+        "assessment": assessment,
         "verdicts": verdicts,
         "cost_optimization": cost_optimization,
         "insights": insights,
