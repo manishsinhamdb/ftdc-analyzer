@@ -152,18 +152,17 @@ def _available_paths(dirpath):
     path missing here (but present, all-zero, in the decoded series) is genuinely
     absent rather than merely constant.
     """
-    files = decoder._metrics_files_in_order(dirpath)
-    for path in files:
-        with open(path, "rb") as fh:
-            for doc in decoder.decode_file_iter(fh):
-                if doc.get("type") == 1:
-                    paths, _, _, _, _ = decoder._parse_chunk(doc)
-                    return set(paths)
+    for doc in decoder.iter_directory_docs(dirpath):
+        if doc.get("type") == 1:
+            paths, _, _, _, _ = decoder._parse_chunk(doc)
+            return set(paths)
     return set()
 
 
-def extract(dirpath):
-    ts, series, meta = decoder.decode_directory(dirpath, keep_paths=CURATED_PATHS)
+def extract(dirpath, on_skip=None):
+    skipped = []
+    ts, series, meta = decoder.decode_directory(
+        dirpath, keep_paths=CURATED_PATHS, skipped=skipped, on_skip=on_skip)
     avail = _available_paths(dirpath)
     missing = sorted(p for p in CURATED_PATHS if p not in avail)
 
@@ -190,7 +189,7 @@ def extract(dirpath):
     return {
         "ts": ts, "series": series, "meta": meta, "avail": avail,
         "missing": missing, "role": role_label, "role_counts": role_counts,
-        "io_totals": io_totals, "data_disk": data_disk,
+        "io_totals": io_totals, "data_disk": data_disk, "skipped": skipped,
     }
 
 
@@ -544,37 +543,32 @@ def _kind_of(col):
     return "counter" if nonneg / d.size > 0.95 else "gauge"
 
 
-def _iter_type1(files):
-    for p in files:
-        with open(p, "rb") as fh:
-            for doc in decoder.decode_file_iter(fh):
-                if doc.get("type") == 1:
-                    yield doc
+def _iter_type1(dirpath, skipped=None, on_skip=None):
+    for doc in decoder.iter_directory_docs(dirpath, skipped=skipped, on_skip=on_skip):
+        if doc.get("type") == 1:
+            yield doc
 
 
-def build_metrics_full(dirpath, n_points=2000):
+def build_metrics_full(dirpath, n_points=2000, on_skip=None):
     """Decode ALL metrics with online equal-time bucketing — never holds a full
-    full-resolution all-metric series in memory. Returns the metrics_full dict."""
-    files = decoder._metrics_files_in_order(dirpath)
-
+    full-resolution all-metric series in memory. Returns the metrics_full dict.
+    Unreadable files are skipped gracefully via the shared iteration layer."""
     # Pass 0: find first & last type-1 chunk + capture metadata host/version (cheap;
     # decode_file_iter parses BSON framing but not the varint stream).
     first_doc = last_doc = None
     hostname = version = None
-    for p in files:
-        with open(p, "rb") as fh:
-            for doc in decoder.decode_file_iter(fh):
-                t = doc.get("type")
-                if t == 0 and hostname is None:
-                    md = doc.get("doc", {}) or {}
-                    bi = md.get("buildInfo", {}) or {}
-                    sysd = (md.get("hostInfo", {}) or {}).get("system", {}) or {}
-                    hostname = sysd.get("hostname")
-                    version = bi.get("version")
-                elif t == 1:
-                    if first_doc is None:
-                        first_doc = doc
-                    last_doc = doc
+    for doc in decoder.iter_directory_docs(dirpath, on_skip=on_skip):
+        t = doc.get("type")
+        if t == 0 and hostname is None:
+            md = doc.get("doc", {}) or {}
+            bi = md.get("buildInfo", {}) or {}
+            sysd = (md.get("hostInfo", {}) or {}).get("system", {}) or {}
+            hostname = sysd.get("hostname")
+            version = bi.get("version")
+        elif t == 1:
+            if first_doc is None:
+                first_doc = doc
+            last_doc = doc
     if first_doc is None:
         raise ValueError("no metric chunks found")
 
@@ -608,7 +602,7 @@ def build_metrics_full(dirpath, n_points=2000):
         MX = np.concatenate([MX, np.full((n_points, extra), -np.inf)], axis=1)
 
     mask = decoder.MASK64
-    for doc in _iter_type1(files):
+    for doc in _iter_type1(dirpath, on_skip=on_skip):
         paths, v0, matrix, mc, dc = decoder._parse_chunk(doc)
         v0u = np.array([int(x) & mask for x in v0], dtype=np.uint64)
         if dc > 0:
@@ -691,11 +685,9 @@ def build_metrics_full(dirpath, n_points=2000):
 
 def read_metadata_doc(dirpath):
     """Return the full type-0 metadata sub-document (first one in the directory)."""
-    for p in decoder._metrics_files_in_order(dirpath):
-        with open(p, "rb") as fh:
-            for doc in decoder.decode_file_iter(fh):
-                if doc.get("type") == 0:
-                    return doc.get("doc", {}) or {}
+    for doc in decoder.iter_directory_docs(dirpath):
+        if doc.get("type") == 0:
+            return doc.get("doc", {}) or {}
     return {}
 
 

@@ -5,6 +5,7 @@ __pycache__/
 build/
 dist/
 *.spec
+logs/
 reports/
 files/
 node_modules/

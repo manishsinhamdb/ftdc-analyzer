@@ -697,8 +697,8 @@ def build_facts(meta_doc, wt_cache_bytes=None, uptime_seconds=None):
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
-def build_results(dirpath):
-    ex = metrics.extract(dirpath)
+def build_results(dirpath, on_skip=None):
+    ex = metrics.extract(dirpath, on_skip=on_skip)
     sig, n = metrics.derive(ex)
     ts = ex["ts"]
     meta = ex["meta"]
@@ -725,6 +725,8 @@ def build_results(dirpath):
                            for p in ex["avail"])
     cluster_role = (f"shard member (replica-set {role})" if sharding_present else None)
 
+    skipped_files = ex.get("skipped", [])
+
     notes = [
         f"role={role}: CPU/DISK sizing assumes this node remains a read replica; "
         "if promotable to PRIMARY, size for primary write load.",
@@ -734,6 +736,11 @@ def build_results(dirpath):
         "limited to visible shard members — cluster-wide metadata behavior may originate "
         "elsewhere.",
     ]
+    if skipped_files:
+        notes.append(
+            f"{len(skipped_files)} file(s) were unreadable and skipped: "
+            + ", ".join(s["file"] for s in skipped_files)
+            + " (analysis is based on the remaining files).")
 
     verdicts = {
         "ram": verdict_ram(sig_stats, sig_stats),
@@ -797,6 +804,7 @@ def build_results(dirpath):
         "facts": facts,
         "series": series_block,
         "missing_paths": ex["missing"],
+        "skipped_files": skipped_files,
         "notes": notes,
     }
     return results

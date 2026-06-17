@@ -252,16 +252,33 @@ def _metrics_files_in_order(dirpath):
     return [os.path.join(dirpath, n) for n in ordered]
 
 
-def decode_directory(dirpath, keep_paths=None):
-    """Decode all metrics.* files in a directory in chronological filename order
-    (metrics.interim last), concatenating into a single set of series."""
-    files = _metrics_files_in_order(dirpath)
-
-    def docs():
-        for p in files:
-            with open(p, "rb") as fh:
+def iter_directory_docs(dirpath, skipped=None, on_skip=None):
+    """Shared file-iteration layer: yield every decoded BSON doc across all
+    metrics.* files (chronological order, interim last). A file that fails to
+    decode is skipped — its name+reason is appended to ``skipped`` (if given) and
+    passed to ``on_skip(file, reason)`` (if given) — and iteration continues with
+    the remaining files. This is the iteration layer; it does not touch the core
+    chunk/varint decode."""
+    for path in _metrics_files_in_order(dirpath):
+        name = os.path.basename(path)
+        try:
+            with open(path, "rb") as fh:
                 for doc in decode_file_iter(fh):
                     yield doc
+        except Exception as e:  # noqa: BLE001 — robustness over a live capture dir
+            reason = f"{type(e).__name__}: {e}"
+            if skipped is not None:
+                skipped.append({"file": name, "reason": reason})
+            if on_skip is not None:
+                on_skip(name, reason)
+
+
+def decode_directory(dirpath, keep_paths=None, skipped=None, on_skip=None):
+    """Decode all metrics.* files in a directory in chronological filename order
+    (metrics.interim last), concatenating into a single set of series. Files that
+    fail to decode are skipped gracefully (see iter_directory_docs)."""
+    def docs():
+        yield from iter_directory_docs(dirpath, skipped=skipped, on_skip=on_skip)
     return _accumulate(docs(), keep_paths)
 
 
