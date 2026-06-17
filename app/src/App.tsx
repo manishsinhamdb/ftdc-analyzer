@@ -1,0 +1,398 @@
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
+import {
+  Activity,
+  Compass,
+  Cpu,
+  Database,
+  Gauge,
+  HardDrive,
+  MemoryStick,
+  Server,
+} from "lucide-react";
+
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+
+import { TimeSeriesChart } from "@/components/TimeSeriesChart";
+import { SignalsTable } from "@/components/SignalsTable";
+import { RangeSelector } from "@/components/RangeSelector";
+import { InsightsStrip } from "@/components/InsightsStrip";
+import { SystemView } from "@/components/SystemView";
+import { ExploreView } from "@/components/ExploreView";
+
+import {
+  type Check,
+  type ChartSpec,
+  type FtdcResults,
+  type MetricsFull,
+  type Verdict,
+  MASTER_SERIES,
+  STATUS_COLORS,
+  VERDICT_COLORS,
+  fmtNum,
+  fmtSpan,
+} from "@/lib/ftdc";
+
+type View = "overview" | "charts" | "signals" | "system" | "explore";
+
+const VERDICT_META: Record<
+  string,
+  { title: string; icon: ComponentType<{ className?: string }> }
+> = {
+  ram: { title: "RAM / Cache", icon: MemoryStick },
+  cpu: { title: "CPU", icon: Cpu },
+  disk: { title: "Disk", icon: HardDrive },
+};
+
+const NAV: { label: string; view: View; icon: ComponentType<{ className?: string }> }[] = [
+  { label: "Overview", view: "overview", icon: Gauge },
+  { label: "Charts", view: "charts", icon: Activity },
+  { label: "Signals", view: "signals", icon: Database },
+  { label: "System", view: "system", icon: Server },
+  { label: "Explore", view: "explore", icon: Compass },
+];
+
+const OVERVIEW_CHART_TITLES = [
+  "CPU utilization",
+  "WiredTiger cache fill",
+  "Disk utilization",
+];
+
+function findChart(catalog: FtdcResults["chart_catalog"], title: string): ChartSpec | undefined {
+  for (const cat of catalog) {
+    const c = cat.charts.find((ch) => ch.title === title);
+    if (c) return c;
+  }
+  return undefined;
+}
+
+function spansTwoCols(ch: ChartSpec): boolean {
+  const t = ch.title.toLowerCase();
+  return ch.series.length === 1 && (t.includes("utilization") || t.includes("targeting"));
+}
+
+function StatusCell({ status }: { status: Check["status"] }) {
+  return (
+    <span className="font-semibold" style={{ color: STATUS_COLORS[status] ?? "#8AA0B6" }}>
+      {status}
+    </span>
+  );
+}
+
+function VerdictCard({ id, v }: { id: string; v: Verdict }) {
+  const meta = VERDICT_META[id];
+  const Icon = meta.icon;
+  const color = VERDICT_COLORS[v.verdict] ?? "#8AA0B6";
+  return (
+    <Card className="flex flex-col">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Icon className="size-4 text-muted-foreground" />
+            {meta.title}
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            <Badge className="font-bold tracking-wide" style={{ backgroundColor: color, color: "#0D1B2A" }}>
+              {v.verdict}
+            </Badge>
+            <Badge variant="outline" className="font-normal text-muted-foreground">
+              {v.confidence}
+            </Badge>
+          </div>
+        </div>
+        <CardDescription className="pt-2 leading-snug text-foreground/90">
+          {v.headline}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-3">
+        {v.recommended_vcpus != null && (
+          <div className="flex items-baseline gap-2 rounded-md bg-secondary/60 px-3 py-2">
+            <span className="text-xs text-muted-foreground">recommended vCPUs</span>
+            <span className="text-3xl font-extrabold leading-none text-primary">
+              {v.recommended_vcpus}
+            </span>
+          </div>
+        )}
+        <p className="text-xs leading-relaxed text-muted-foreground">{v.recommendation}</p>
+        <Separator className="my-1" />
+        <Table>
+          <TableHeader>
+            <TableRow className="border-border hover:bg-transparent">
+              <TableHead className="h-7 px-2 text-xs">check</TableHead>
+              <TableHead className="h-7 px-2 text-right text-xs">value</TableHead>
+              <TableHead className="h-7 px-2 text-right text-xs">thr</TableHead>
+              <TableHead className="h-7 px-2 text-right text-xs">status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {v.checks.map((c) => (
+              <TableRow key={c.name} className="border-border hover:bg-secondary/40">
+                <TableCell className="px-2 py-1 text-xs">{c.name}</TableCell>
+                <TableCell className="px-2 py-1 text-right font-mono text-xs">{fmtNum(c.value)}</TableCell>
+                <TableCell className="px-2 py-1 text-right font-mono text-xs text-muted-foreground">
+                  {c.threshold == null ? "n/a" : c.threshold}
+                </TableCell>
+                <TableCell className="px-2 py-1 text-right text-xs">
+                  <StatusCell status={c.status} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function HwPill({ children }: { children: ReactNode }) {
+  return (
+    <span className="rounded-full border border-border bg-secondary/50 px-3 py-1 text-xs text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+export default function App() {
+  const [data, setData] = useState<FtdcResults | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<View>("overview");
+  const [range, setRange] = useState<[number, number] | null>(null);
+  const [activeCat, setActiveCat] = useState<string>("");
+  const [metricsFull, setMetricsFull] = useState<MetricsFull | null>(null);
+  const [mfLoading, setMfLoading] = useState(false);
+
+  useEffect(() => {
+    fetch("/sample_results.json")
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((d: FtdcResults) => setData(d))
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  // Lazy-load the full metric catalog the first time Explore opens; cache after.
+  useEffect(() => {
+    if (view !== "explore" || metricsFull || mfLoading) return;
+    setMfLoading(true);
+    fetch("/metrics_full.json")
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((d: MetricsFull) => setMetricsFull(d))
+      .catch((e) => setError(String(e)))
+      .finally(() => setMfLoading(false));
+  }, [view, metricsFull, mfLoading]);
+
+  const master = useMemo(() => {
+    if (!data) return undefined;
+    const m = data.series[MASTER_SERIES];
+    if (m?.t?.length) return m;
+    return Object.values(data.series).find((s) => s?.t?.length);
+  }, [data]);
+
+  const fullRange = useMemo<[number, number]>(() => {
+    if (master?.t?.length) return [master.t[0], master.t[master.t.length - 1]];
+    return [0, 0];
+  }, [master]);
+
+  // Initialise the window to All once data + master are available.
+  useEffect(() => {
+    if (data && master) setRange(fullRange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, master]);
+
+  const effectiveRange = range ?? fullRange;
+
+  return (
+    <div className="flex min-h-screen bg-background text-foreground">
+      {/* Sidebar */}
+      <aside className="hidden w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+        <div className="flex items-center gap-2 px-5 py-5">
+          <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
+            <Database className="size-4" />
+          </div>
+          <div className="leading-tight">
+            <div className="text-sm font-bold">FTDC Analyzer</div>
+            <div className="text-[10px] text-muted-foreground">MongoDB diagnostics</div>
+          </div>
+        </div>
+        <Separator className="bg-sidebar-border" />
+        <nav className="flex flex-col gap-1 p-3">
+          {NAV.map((n) => {
+            const Icon = n.icon;
+            const active = view === n.view;
+            return (
+              <button
+                key={n.view}
+                onClick={() => setView(n.view)}
+                className={
+                  "flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors " +
+                  (active
+                    ? "bg-sidebar-accent font-medium text-foreground"
+                    : "text-muted-foreground hover:bg-sidebar-accent/50")
+                }
+              >
+                <Icon className="size-4" />
+                {n.label}
+              </button>
+            );
+          })}
+        </nav>
+        <div className="mt-auto p-4 text-[10px] text-muted-foreground">
+          {data ? `schema v${data.schema_version}` : ""}
+        </div>
+      </aside>
+
+      {/* Main column */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Topbar */}
+        <header className="border-b border-border bg-card/60 px-6 py-4">
+          {data ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <h1 className="text-xl font-bold">{data.host.hostname}</h1>
+              <Badge style={{ backgroundColor: "#5A6E82", color: "#E6EDF3" }}>{data.host.role}</Badge>
+              <span className="text-sm text-muted-foreground">MongoDB {data.host.mongo_version}</span>
+              <span className="text-sm text-muted-foreground">
+                {data.capture.first_ts_iso?.replace("+00:00", "Z")} →{" "}
+                {data.capture.last_ts_iso?.replace("+00:00", "Z")}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                · {fmtSpan(data.capture.span_seconds)} · {data.capture.samples.toLocaleString("en-US")} samples
+              </span>
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                <HwPill>{data.host.num_cores} cores</HwPill>
+                <HwPill>{((data.host.mem_mb ?? 0) / 1024).toFixed(1)} GB RAM</HwPill>
+                <HwPill>data disk: {data.host.data_disk}</HwPill>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">
+              {error ? `Failed to load data: ${error}` : "Loading…"}
+            </div>
+          )}
+        </header>
+
+        {/* Content */}
+        <main className="flex-1 space-y-5 overflow-auto p-6">
+          {data && view === "overview" && (
+            <>
+              <div className="sticky top-0 z-20 -mx-6 -mt-6 mb-1 bg-background/80 px-6 pb-1 pt-6 backdrop-blur">
+                <RangeSelector
+                  capture={data.capture}
+                  masterSeries={master}
+                  value={effectiveRange}
+                  onChange={setRange}
+                />
+              </div>
+
+              <InsightsStrip insights={data.insights} />
+
+              <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                <VerdictCard id="ram" v={data.verdicts.ram} />
+                <VerdictCard id="cpu" v={data.verdicts.cpu} />
+                <VerdictCard id="disk" v={data.verdicts.disk} />
+              </section>
+
+              <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                {OVERVIEW_CHART_TITLES.map((title) => {
+                  const spec = findChart(data.chart_catalog, title);
+                  return spec ? (
+                    <TimeSeriesChart
+                      key={title}
+                      spec={spec}
+                      series={data.series}
+                      range={effectiveRange}
+                      className={spansTwoCols(spec) ? "xl:col-span-2" : undefined}
+                    />
+                  ) : null;
+                })}
+              </section>
+            </>
+          )}
+
+          {data && view === "charts" && (
+            <>
+              <div className="sticky top-0 z-20 -mx-6 -mt-6 mb-1 bg-background/80 px-6 pb-1 pt-6 backdrop-blur">
+                <RangeSelector
+                  capture={data.capture}
+                  masterSeries={master}
+                  value={effectiveRange}
+                  onChange={setRange}
+                />
+              </div>
+
+              <Tabs
+                value={activeCat || data.chart_catalog[0]?.category || ""}
+                onValueChange={setActiveCat}
+              >
+                <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 overflow-x-auto">
+                  {data.chart_catalog.map((cat) => (
+                    <TabsTrigger key={cat.category} value={cat.category} className="text-xs">
+                      {cat.category}{" "}
+                      <span className="ml-1 text-muted-foreground">({cat.charts.length})</span>
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+
+                {data.chart_catalog.map((cat) => (
+                  <TabsContent key={cat.category} value={cat.category} className="mt-4">
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                      {cat.charts.map((ch) => (
+                        <TimeSeriesChart
+                          key={ch.title}
+                          spec={ch}
+                          series={data.series}
+                          range={effectiveRange}
+                          className={spansTwoCols(ch) ? "xl:col-span-2" : undefined}
+                        />
+                      ))}
+                    </div>
+                  </TabsContent>
+                ))}
+              </Tabs>
+            </>
+          )}
+
+          {data && view === "signals" && <SignalsTable signals={data.signals} />}
+
+          {data && view === "system" && <SystemView facts={data.facts} />}
+
+          {data && view === "explore" && (
+            <ExploreView
+              metricsFull={metricsFull}
+              loading={mfLoading}
+              capture={data.capture}
+              master={master}
+              range={effectiveRange}
+              setRange={setRange}
+            />
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
