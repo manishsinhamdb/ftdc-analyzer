@@ -1,0 +1,53 @@
+name: build
+
+# Best-effort CI: builds the PyInstaller sidecar engine and the Tauri desktop app
+# on macOS. May need iteration (toolchain/version drift, signing).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos-build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python engine deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymongo numpy plotly pyinstaller
+
+      - name: Build sidecar engine (PyInstaller one-file)
+        run: |
+          pyinstaller --onefile --name ftdc-engine \
+            --collect-all bson --collect-all numpy --collect-all pymongo \
+            --paths . ftdc_engine_entry.py
+          mkdir -p app/src-tauri/binaries
+          TRIPLE=$(rustc -vV | sed -n 's/host: //p')
+          cp dist/ftdc-engine "app/src-tauri/binaries/ftdc-engine-${TRIPLE}"
+          chmod +x "app/src-tauri/binaries/ftdc-engine-${TRIPLE}"
+
+      - name: Install frontend deps
+        working-directory: app
+        run: npm ci
+
+      - name: Build frontend (tsc + vite)
+        working-directory: app
+        run: npm run build
+
+      - name: Build Tauri app (unsigned)
+        working-directory: app
+        run: npm run tauri build

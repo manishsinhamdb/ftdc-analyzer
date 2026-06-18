@@ -22,6 +22,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { toast, Toaster } from "sonner";
 
 import {
@@ -356,6 +357,21 @@ export default function App() {
             <span className="text-xs text-muted-foreground">
               source: <span className="font-medium text-foreground">{sourceLabel}</span>
             </span>
+            {dataDir && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-xs"
+                disabled={analyzing}
+                onClick={() =>
+                  revealItemInDir(`${dataDir}/report.html`).catch((e) =>
+                    toast.error(`Export failed: ${String(e)}`),
+                  )
+                }
+              >
+                Export HTML
+              </Button>
+            )}
             <Button size="sm" variant="ghost" className="h-8 text-xs"
                     onClick={() => loadFrom(null, "bundled sample").then(() => setView("overview")).catch((e) => toast.error(String(e)))}
                     disabled={analyzing}>

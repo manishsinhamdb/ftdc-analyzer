@@ -135,6 +135,13 @@ table{width:100%;border-collapse:collapse;font-size:12px;}
 .nodata{color:__MUTED__;font-size:13px;padding:30px;text-align:center;}
 .footer{font-size:12px;color:__MUTED__;}
 .footer ul{margin:6px 0;padding-left:18px;}
+.siggrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:12px;margin-top:10px;}
+.sigcard{background:rgba(255,255,255,.02);border:1px solid __BORDER__;border-radius:10px;
+  padding:12px 14px;}
+.sigcard ul{margin:6px 0;padding-left:16px;}
+.sigcard li{font-size:11px;color:__MUTED__;}
+.sbadge{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;font-weight:700;
+  color:#0D1B2A;margin-right:8px;}
 """
 
 JS = """
@@ -268,10 +275,84 @@ def _verdict_card(title, v):
     </div>"""
 
 
-def _charts_html(results):
+_REPORT_PALETTE = ["#00ED64", "#4DA6FF", "#FFC857", "#E05C4B", "#B392F0", "#3DDBD9"]
+_SIG_COLORS = {"OK": "#00ED64", "INFO": "#5A6E82", "WARN": "#F5A623", "CRITICAL": "#E05C4B"}
+
+
+def _catalog_to_chart_config(results):
+    """Convert results.chart_catalog → the report's chart-config shape (ids/specs/
+    reflines), so the HTML report renders the full data-driven catalog. Falls back
+    to the built-in CHARTS if no catalog is present."""
+    catalog = results.get("chart_catalog")
+    if not catalog:
+        return CHARTS
+    cfg = []
+    cid = 0
+    for category in catalog:
+        charts = []
+        for ch in category.get("charts", []):
+            cid += 1
+            specs, reflines = [], []
+            for i, e in enumerate(ch.get("series", [])):
+                specs.append({"name": e["key"], "label": e.get("label", e["key"]),
+                              "color": _REPORT_PALETTE[i % len(_REPORT_PALETTE)]})
+                if e.get("refLine") is not None:
+                    reflines.append({"y": e["refLine"],
+                                     "label": e.get("refLabel") or f"ref {e['refLine']}",
+                                     "color": "#F5A623"})
+            charts.append({"id": f"cat_{cid}", "title": ch.get("title", ""),
+                           "specs": specs, "reflines": reflines})
+        cfg.append({"title": category.get("category", ""),
+                    "full": str(category.get("category", "")).startswith("Disk"),
+                    "charts": charts})
+    return cfg
+
+
+def _assessment_html(results):
+    a = results.get("assessment")
+    if not a:
+        return ""
+    sev_rank = {"CRITICAL": 0, "WARN": 1, "INFO": 2, "OK": 3}
+    sigs = sorted(a.get("signatures", []), key=lambda s: sev_rank.get(s.get("severity"), 9))
+    cards = []
+    for s in sigs:
+        color = _SIG_COLORS.get(s.get("severity"), "#5A6E82")
+        syms = "".join(f"<li class='mono'>{_e(x)}</li>" for x in s.get("symptoms", []))
+        cards.append(
+            f"<div class='sigcard' style='border-left:3px solid {color}'>"
+            f"<div><span class='sbadge' style='background:{color}'>{_e(s.get('severity'))}</span>"
+            f"<b>{_e(s.get('title'))}</b> <span class='muted'>· {_e(s.get('purpose'))}</span></div>"
+            f"<ul>{syms}</ul>"
+            f"<div class='rec'>{_e(s.get('recommendation'))}</div></div>")
+    purposes = " ".join(f"<span class='pill'>{_e(p)}</span>"
+                        for p in a.get("purposes_covered", []))
+    return (f"<div class='panel'><h2>First-draft inference — {_e(a.get('posture'))}</h2>"
+            f"<div class='headline'>{_e(a.get('headline'))}</div>"
+            f"<div style='margin:8px 0'>{purposes}</div>"
+            f"<div class='siggrid'>" + "".join(cards) + "</div></div>")
+
+
+def _cost_html(results):
+    co = results.get("cost_optimization")
+    if not co or not co.get("actions"):
+        return ""
+    rows = []
+    for act in co["actions"]:
+        rows.append(
+            f"<div class='sigcard'><div><b>{_e(act.get('resource'))}</b> "
+            f"<span class='muted'>· {_e(act.get('lever'))} · {_e(act.get('risk'))} risk</span></div>"
+            f"<div class='rec'>{_e(act.get('recommendation'))}</div>"
+            f"<div class='muted' style='font-size:11px'>{_e(act.get('rationale'))}</div></div>")
+    return (f"<div class='panel'><h2>Cost optimization — opportunity: "
+            f"{_e(co.get('opportunity'))}</h2>"
+            f"<div class='muted'>{_e(co.get('headline'))}</div>"
+            f"<div class='siggrid'>" + "".join(rows) + "</div></div>")
+
+
+def _charts_html(results, config):
     series = results.get("series", {}) or {}
     out = []
-    for sec in CHARTS:
+    for sec in config:
         cards = []
         for c in sec["charts"]:
             present = any((series.get(sp["name"]) or {}).get("t") for sp in c["specs"])
@@ -327,9 +408,11 @@ def render_html(results, plotly_inline_content=None):
     else:
         plotly_tag = f'<script src="{PLOTLY_URL}" charset="utf-8"></script>'
 
+    chart_config = _catalog_to_chart_config(results)
+
     # Embed as JSON in script tags; neutralize any "</" to avoid breaking the tag.
     data_json = json.dumps(results).replace("</", "<\\/")
-    charts_json = json.dumps(CHARTS).replace("</", "<\\/")
+    charts_json = json.dumps(chart_config).replace("</", "<\\/")
 
     cards = "".join([
         _verdict_card("RAM", (results.get("verdicts") or {}).get("ram")),
@@ -346,8 +429,10 @@ def render_html(results, plotly_inline_content=None):
         f"<title>FTDC report · {_e(host)}</title>"
         f"<style>{css}</style>{plotly_tag}</head><body><div class='wrap'>"
         + _header_html(results)
+        + _assessment_html(results)
         + "<div class='cards'>" + cards + "</div>"
-        + _charts_html(results)
+        + _cost_html(results)
+        + _charts_html(results, chart_config)
         + _signal_table(results)
         + _footer_html(results)
         + "</div>"

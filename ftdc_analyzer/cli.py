@@ -22,6 +22,7 @@ from collections import defaultdict
 
 from ftdc_analyzer import verdicts
 from ftdc_analyzer import metrics
+from ftdc_analyzer import report
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
@@ -165,6 +166,14 @@ def main(argv=None):
             json.dump(metrics_full, fh, separators=(",", ":"))
         rl.add(f"wrote {results_path} ({os.path.getsize(results_path):,} bytes)")
         rl.add(f"wrote {mf_path} ({os.path.getsize(mf_path):,} bytes)")
+        # self-contained HTML report (CDN Plotly) for the desktop "Export HTML" action
+        try:
+            report_path = os.path.join(out_dir, "report.html")
+            with open(report_path, "w") as fh:
+                fh.write(report.render_html(results))
+            rl.add(f"wrote {report_path} ({os.path.getsize(report_path):,} bytes)")
+        except Exception as e:  # noqa: BLE001 — report is best-effort, never fail the run
+            rl.add(f"WARN report.html not written: {type(e).__name__}: {e}")
         # two parseable stdout lines
         print(f"hostname={resolved_host}")
         print(f"out_dir={out_dir}")
