@@ -348,13 +348,18 @@ def derive(ex):
     else:
         sig["asserts_per_min"] = None
 
-    # --- repl lag ---
-    optime_members = [S(f"replSetGetStatus.members.{i}.optimeDate") for i in range(3)]
-    optime_present = [v for v in optime_members if v is not None]
+    # --- repl lag (per member vs the most-recent/primary optime) ---
+    optime_members = {i: S(f"replSetGetStatus.members.{i}.optimeDate") for i in range(3)}
+    optime_present = {i: v for i, v in optime_members.items() if v is not None}
     if len(optime_present) >= 2:
-        stacked = np.vstack(optime_present)  # ms
-        lag = (stacked.max(axis=0) - stacked.min(axis=0)) / 1000.0
-        sig["repl_lag_s"] = lag[1:]
+        stacked = np.vstack(list(optime_present.values()))  # ms, full length
+        primary_optime = stacked.max(axis=0)   # the freshest member is the primary
+        # max secondary lag = freshest - stalest
+        sig["repl_lag_s"] = ((primary_optime - stacked.min(axis=0)) / 1000.0)[1:]
+        # per-member seconds behind the primary (clamped >= 0)
+        for i, v in optime_present.items():
+            member_lag = np.clip((primary_optime - v) / 1000.0, 0.0, None)
+            sig[f"repl_lag_member_{i}_s"] = member_lag[1:]
     else:
         sig["repl_lag_s"] = None
 

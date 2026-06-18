@@ -444,7 +444,10 @@ CHART_CATALOG = [
     ]},
     {"category": "Replication", "charts": [
         {"title": "Replication lag", "unit": "s", "series": [
-            _sc("repl_lag_s", "lag s")]},
+            _sc("repl_lag_member_0_s", "member 0"),
+            _sc("repl_lag_member_1_s", "member 1"),
+            _sc("repl_lag_member_2_s", "member 2"),
+            _sc("repl_lag_s", "max secondary", 10, "10s")]},
         {"title": "Replication writes & apply", "unit": "/s", "series": [
             _sc("repl_writes_ps", "repl writes"), _sc("repl_apply_ops_ps", "apply ops"),
             _sc("repl_getmores_ps", "getmores")]},
@@ -747,6 +750,14 @@ def build_results(dirpath, on_skip=None):
 
     skipped_files = ex.get("skipped", [])
 
+    # Oplog window needs first/last oplog-entry timestamps, which FTDC does not
+    # capture; verify rather than fabricate. (Used to gate replication headroom.)
+    oplog_window_available = any(
+        "oplog" in p.lower()
+        and ("first" in p.lower() or "last" in p.lower())
+        and ("entry" in p.lower() or "optime" in p.lower())
+        for p in ex["avail"])
+
     notes = [
         f"role={role}: CPU/DISK sizing assumes this node remains a read replica; "
         "if promotable to PRIMARY, size for primary write load.",
@@ -761,6 +772,9 @@ def build_results(dirpath, on_skip=None):
             f"{len(skipped_files)} file(s) were unreadable and skipped: "
             + ", ".join(s["file"] for s in skipped_files)
             + " (analysis is based on the remaining files).")
+    if not oplog_window_available:
+        notes.append("oplog window not present in this capture — oplog window/churn and "
+                     "replication headroom omitted.")
 
     verdicts = {
         "ram": verdict_ram(sig_stats, sig_stats),
