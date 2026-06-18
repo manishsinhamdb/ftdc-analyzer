@@ -45,6 +45,7 @@ export interface HostInfo {
   mem_mb: number | null;
   role: string | null;
   data_disk: string | null;
+  cluster_role?: string | null;
 }
 
 export interface CaptureInfo {
@@ -92,6 +93,54 @@ export interface Insight {
   threshold: number | null;
 }
 
+// ---- v3: assessment (signature engine) + cost optimization -----------------
+
+export type SignatureSeverity = "OK" | "INFO" | "WARN" | "CRITICAL";
+
+export interface Signature {
+  id: string;
+  title: string;
+  severity: SignatureSeverity;
+  purpose: string;
+  symptoms: string[];
+  recommendation: string;
+}
+
+export interface Assessment {
+  headline: string;
+  posture: string;
+  purposes_covered: string[];
+  signatures: Signature[];
+}
+
+export interface CostAction {
+  resource: string;
+  recommendation: string;
+  rationale: string;
+  lever: string;
+  risk: string;
+}
+
+export interface CostOptimization {
+  opportunity: "high" | "medium" | "low" | "none";
+  headline: string;
+  actions: CostAction[];
+}
+
+export const SIGNATURE_COLORS: Record<SignatureSeverity, string> = {
+  OK: "#00ED64",
+  INFO: "#5A6E82",
+  WARN: "#F5A623",
+  CRITICAL: "#E05C4B",
+};
+
+export const SEVERITY_RANK: Record<SignatureSeverity, number> = {
+  CRITICAL: 0,
+  WARN: 1,
+  INFO: 2,
+  OK: 3,
+};
+
 export interface FtdcResults {
   schema_version: number;
   generated_at: string;
@@ -99,12 +148,15 @@ export interface FtdcResults {
   host: HostInfo;
   capture: CaptureInfo;
   signals: Record<string, SignalStat>;
+  assessment: Assessment;
   verdicts: Verdicts;
+  cost_optimization: CostOptimization;
   insights: Insight[];
   chart_catalog: ChartCategory[];
   facts: Facts;
   series: Record<string, SeriesData>;
   missing_paths: string[];
+  skipped_files?: { file: string; reason: string }[];
   notes: string[];
 }
 

@@ -17,6 +17,7 @@ import {
   MemoryStick,
   Play,
   Server,
+  Sparkles,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -49,6 +50,7 @@ import { RangeSelector } from "@/components/RangeSelector";
 import { InsightsStrip } from "@/components/InsightsStrip";
 import { SystemView } from "@/components/SystemView";
 import { ExploreView } from "@/components/ExploreView";
+import { AssessmentPanel } from "@/components/AssessmentPanel";
 
 import {
   type Check,
@@ -63,7 +65,7 @@ import {
   fmtSpan,
 } from "@/lib/ftdc";
 
-type View = "overview" | "charts" | "signals" | "system" | "explore";
+type View = "overview" | "inference" | "charts" | "signals" | "system" | "explore";
 
 const VERDICT_META: Record<
   string,
@@ -76,6 +78,7 @@ const VERDICT_META: Record<
 
 const NAV: { label: string; view: View; icon: ComponentType<{ className?: string }> }[] = [
   { label: "Overview", view: "overview", icon: Gauge },
+  { label: "Inference", view: "inference", icon: Sparkles },
   { label: "Charts", view: "charts", icon: Activity },
   { label: "Signals", view: "signals", icon: Database },
   { label: "System", view: "system", icon: Server },
@@ -400,6 +403,13 @@ export default function App() {
                 />
               </div>
 
+              {data.assessment && (
+                <AssessmentPanel
+                  assessment={data.assessment}
+                  costOptimization={data.cost_optimization}
+                />
+              )}
+
               <InsightsStrip insights={data.insights} />
 
               <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -466,6 +476,13 @@ export default function App() {
                 ))}
               </Tabs>
             </>
+          )}
+
+          {data && view === "inference" && data.assessment && (
+            <AssessmentPanel
+              assessment={data.assessment}
+              costOptimization={data.cost_optimization}
+            />
           )}
 
           {data && view === "signals" && <SignalsTable signals={data.signals} />}
