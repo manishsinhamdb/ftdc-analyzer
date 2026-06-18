@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
   Activity,
+  ChevronDown,
   Compass,
   Cpu,
   Database,
@@ -14,6 +15,7 @@ import {
   Gauge,
   HardDrive,
   History,
+  Home,
   Loader2,
   MemoryStick,
   PanelLeftClose,
@@ -56,7 +58,14 @@ import { SystemView } from "@/components/SystemView";
 import { ExploreView } from "@/components/ExploreView";
 import { AssessmentPanel } from "@/components/AssessmentPanel";
 import { Landing } from "@/components/Landing";
-import { HistoryView } from "@/components/HistoryView";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 import {
   type Check,
@@ -72,14 +81,7 @@ import {
   fmtSpan,
 } from "@/lib/ftdc";
 
-type View =
-  | "overview"
-  | "inference"
-  | "charts"
-  | "signals"
-  | "system"
-  | "explore"
-  | "history";
+type View = "overview" | "inference" | "charts" | "signals" | "system" | "explore";
 
 const VERDICT_META: Record<
   string,
@@ -96,13 +98,12 @@ const NAV: {
   icon: ComponentType<{ className?: string }>;
   tip: string;
 }[] = [
-  { label: "Overview", view: "overview", icon: Gauge, tip: "Verdicts, assessment, and headline charts" },
-  { label: "Assessment", view: "inference", icon: Sparkles, tip: "Automated first-pass findings and recommendations" },
+  { label: "Overview", view: "overview", icon: Gauge, tip: "Unbiased results: verdicts, insight chips, headline charts" },
   { label: "Charts", view: "charts", icon: Activity, tip: "All metric charts grouped by category" },
   { label: "Signals", view: "signals", icon: Database, tip: "Searchable table of every derived signal" },
   { label: "System", view: "system", icon: Server, tip: "Full host build, OS, and mongod config" },
   { label: "Explore", view: "explore", icon: Compass, tip: "Browse and chart any of the 1300+ raw metrics" },
-  { label: "History", view: "history", icon: History, tip: "Revisit a previously analyzed run from local cache" },
+  { label: "Assessment", view: "inference", icon: Sparkles, tip: "Opt-in automated first-pass findings and recommendations" },
 ];
 
 const OVERVIEW_CHART_TITLES = [
@@ -263,6 +264,15 @@ export default function App() {
       );
   }
 
+  // Home / "New analysis": clear the loaded run and return to the landing screen.
+  function goHome() {
+    setData(null);
+    setDataDir(null);
+    setMetricsFull(null);
+    setView("overview");
+    setError(null);
+  }
+
   function loadDemo() {
     loadFrom(null, "demo sample")
       .then(() => setView("overview"))
@@ -386,17 +396,24 @@ export default function App() {
           (collapsed ? "w-14" : "w-60")
         }
       >
-        <div className={"flex items-center py-5 " + (collapsed ? "justify-center px-2" : "gap-2 px-5")}>
+        <button
+          onClick={goHome}
+          title="New analysis — back to the start screen"
+          className={
+            "flex items-center py-5 transition-colors hover:bg-sidebar-accent/40 " +
+            (collapsed ? "justify-center px-2" : "gap-2 px-5")
+          }
+        >
           <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Database className="size-4" />
           </div>
           {!collapsed && (
-            <div className="leading-tight">
+            <div className="text-left leading-tight">
               <div className="text-sm font-bold">FTDC Analyzer</div>
               <div className="text-[10px] text-muted-foreground">MongoDB diagnostics</div>
             </div>
           )}
-        </div>
+        </button>
         <Separator className="bg-sidebar-border" />
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
           {NAV.map((n) => {
@@ -441,8 +458,13 @@ export default function App() {
 
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Source bar — live file picker + analyze + bundled fallback */}
+        {/* Source bar — live file picker + analyze + history + fallback */}
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-6 py-2.5">
+          <Button size="sm" variant="ghost" className="h-8 gap-2 text-xs" onClick={goHome}
+                  disabled={analyzing} title="Start a new analysis (back to the start screen)">
+            <Home className="size-4" /> New analysis
+          </Button>
+          <Separator orientation="vertical" className="h-5" />
           <Button size="sm" variant="outline" className="h-8 gap-2 text-xs" onClick={pickFolder}
                   disabled={analyzing}
                   title="Choose a diagnostic.data folder (or a parent of host folders) to analyze">
@@ -458,6 +480,40 @@ export default function App() {
             {analyzing ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
             {analyzing ? "Analyzing…" : "Analyze"}
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs"
+                      disabled={analyzing} title="Revisit a previously analyzed run">
+                <History className="size-4" /> History
+                {history.length > 0 && (
+                  <span className="ml-0.5 opacity-70">({history.length})</span>
+                )}
+                <ChevronDown className="size-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-80 w-80 overflow-y-auto">
+              <DropdownMenuLabel>Past runs (local cache)</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {history.length === 0 ? (
+                <div className="px-2 py-3 text-xs text-muted-foreground">
+                  No past runs yet. Analyze a folder to build history.
+                </div>
+              ) : (
+                history.map((e) => (
+                  <DropdownMenuItem
+                    key={e.cache_dir}
+                    onClick={() => loadHistoryEntry(e)}
+                    className="flex flex-col items-start gap-0.5"
+                  >
+                    <span className="text-xs font-medium">{e.hostname}</span>
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {new Date(e.timestamp).toLocaleString()}
+                    </span>
+                  </DropdownMenuItem>
+                ))
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           {analyzing && (
             <span className="text-xs text-muted-foreground">
               running engine — ~1–2 min for multi-day captures
@@ -613,10 +669,6 @@ export default function App() {
               assessment={data.assessment}
               costOptimization={data.cost_optimization}
             />
-          )}
-
-          {data && view === "history" && (
-            <HistoryView entries={history} analyzing={analyzing} onLoad={loadHistoryEntry} />
           )}
 
           {data && view === "signals" && <SignalsTable signals={data.signals} />}
