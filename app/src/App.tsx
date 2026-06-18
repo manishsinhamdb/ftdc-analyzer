@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -234,6 +235,10 @@ export default function App() {
   const [demoAvailable, setDemoAvailable] = useState(false);
   const [collapsed, setCollapsed] = useState(false); // sidebar rail (in-session)
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
+  // Opt-in gate for the Automated Assessment. Default OFF so the default view is
+  // unbiased. HOOK POINT: when wired, flipping this on should trigger the future
+  // local-LLM assessment run (today it just reveals the deterministic pass).
+  const [generateAssessment, setGenerateAssessment] = useState(false);
 
   async function loadFrom(dir: string | null, label: string) {
     const file = dir === null ? "sample_results.json" : "results.json";
@@ -480,6 +485,14 @@ export default function App() {
             {analyzing ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
             {analyzing ? "Analyzing…" : "Analyze"}
           </Button>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground"
+                 title="Off by default for an unbiased view. Generates the Automated Assessment (deterministic today; the hook point for a future local-LLM pass).">
+            <Checkbox
+              checked={generateAssessment}
+              onCheckedChange={(c) => setGenerateAssessment(c === true)}
+            />
+            Generate assessment
+          </label>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs"
@@ -583,13 +596,9 @@ export default function App() {
                 />
               </div>
 
-              {data.assessment && (
-                <AssessmentPanel
-                  assessment={data.assessment}
-                  costOptimization={data.cost_optimization}
-                />
-              )}
-
+              {/* Overview is intentionally unbiased: verdicts, insight chips, and
+                  headline charts only. The Automated Assessment lives on its own tab,
+                  opt-in via the "Generate assessment" toggle. */}
               <InsightsStrip insights={data.insights} />
 
               <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -664,11 +673,29 @@ export default function App() {
             </Tabs>
           )}
 
-          {data && view === "inference" && data.assessment && (
-            <AssessmentPanel
-              assessment={data.assessment}
-              costOptimization={data.cost_optimization}
-            />
+          {data && view === "inference" && (
+            generateAssessment && data.assessment ? (
+              <AssessmentPanel
+                assessment={data.assessment}
+                costOptimization={data.cost_optimization}
+              />
+            ) : (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center gap-4 py-16 text-center">
+                  <Sparkles className="size-8 text-muted-foreground/60" />
+                  <div className="max-w-md space-y-1">
+                    <div className="text-base font-semibold">Automated Assessment is off</div>
+                    <p className="text-sm text-muted-foreground">
+                      A deterministic first pass turns combinatorial signals into named findings
+                      and recommendations. It's opt-in so the default view stays unbiased.
+                    </p>
+                  </div>
+                  <Button className="gap-2" onClick={() => setGenerateAssessment(true)}>
+                    <Sparkles className="size-4" /> Generate assessment
+                  </Button>
+                </CardContent>
+              </Card>
+            )
           )}
 
           {data && view === "signals" && <SignalsTable signals={data.signals} />}
