@@ -13,6 +13,7 @@ import {
   FolderOpen,
   Gauge,
   HardDrive,
+  History,
   Loader2,
   MemoryStick,
   PanelLeftClose,
@@ -55,12 +56,14 @@ import { SystemView } from "@/components/SystemView";
 import { ExploreView } from "@/components/ExploreView";
 import { AssessmentPanel } from "@/components/AssessmentPanel";
 import { Landing } from "@/components/Landing";
+import { HistoryView } from "@/components/HistoryView";
 
 import {
   type Check,
   type ChartSpec,
   type FtdcResults,
   type MetricsFull,
+  type RunHistoryEntry,
   type Verdict,
   MASTER_SERIES,
   STATUS_COLORS,
@@ -69,7 +72,14 @@ import {
   fmtSpan,
 } from "@/lib/ftdc";
 
-type View = "overview" | "inference" | "charts" | "signals" | "system" | "explore";
+type View =
+  | "overview"
+  | "inference"
+  | "charts"
+  | "signals"
+  | "system"
+  | "explore"
+  | "history";
 
 const VERDICT_META: Record<
   string,
@@ -92,6 +102,7 @@ const NAV: {
   { label: "Signals", view: "signals", icon: Database, tip: "Searchable table of every derived signal" },
   { label: "System", view: "system", icon: Server, tip: "Full host build, OS, and mongod config" },
   { label: "Explore", view: "explore", icon: Compass, tip: "Browse and chart any of the 1300+ raw metrics" },
+  { label: "History", view: "history", icon: History, tip: "Revisit a previously analyzed run from local cache" },
 ];
 
 const OVERVIEW_CHART_TITLES = [
@@ -221,6 +232,7 @@ export default function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const [demoAvailable, setDemoAvailable] = useState(false);
   const [collapsed, setCollapsed] = useState(false); // sidebar rail (in-session)
+  const [history, setHistory] = useState<RunHistoryEntry[]>([]);
 
   async function loadFrom(dir: string | null, label: string) {
     const file = dir === null ? "sample_results.json" : "results.json";
@@ -238,7 +250,18 @@ export default function App() {
     fetch("/sample_results.json", { method: "HEAD" })
       .then((r) => setDemoAvailable(r.ok))
       .catch(() => setDemoAvailable(false));
+    invoke<RunHistoryEntry[]>("list_history")
+      .then((h) => setHistory(h))
+      .catch(() => setHistory([]));
   }, []);
+
+  function loadHistoryEntry(entry: RunHistoryEntry) {
+    loadFrom(entry.cache_dir, `${entry.hostname} (history)`)
+      .then(() => setView("overview"))
+      .catch((e) =>
+        toast.error(`Could not load cached run (it may have been cleared): ${String(e)}`),
+      );
+  }
 
   function loadDemo() {
     loadFrom(null, "demo sample")
@@ -282,6 +305,15 @@ export default function App() {
       await loadFrom(res.dir, `${res.hostname} (live)`);
       setView("overview");
       toast.success(`Analyzed ${res.hostname}`);
+      const entry: RunHistoryEntry = {
+        hostname: res.hostname,
+        timestamp: new Date().toISOString(),
+        source_path: selectedPath,
+        cache_dir: res.dir,
+      };
+      invoke<RunHistoryEntry[]>("record_run", { entry })
+        .then((h) => setHistory(h))
+        .catch(() => {});
     } catch (e) {
       toast.error(`Analysis failed: ${String(e)}`);
     } finally {
@@ -567,6 +599,10 @@ export default function App() {
               assessment={data.assessment}
               costOptimization={data.cost_optimization}
             />
+          )}
+
+          {data && view === "history" && (
+            <HistoryView entries={history} analyzing={analyzing} onLoad={loadHistoryEntry} />
           )}
 
           {data && view === "signals" && <SignalsTable signals={data.signals} />}

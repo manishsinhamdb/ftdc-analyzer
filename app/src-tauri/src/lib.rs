@@ -63,6 +63,54 @@ async fn analyze_path(app: tauri::AppHandle, path: String) -> Result<AnalyzeResu
     Ok(AnalyzeResult { dir, hostname })
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct HistoryEntry {
+    hostname: String,
+    timestamp: String,
+    source_path: String,
+    cache_dir: String,
+}
+
+fn history_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("cannot resolve app data dir: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create app data dir: {e}"))?;
+    Ok(dir.join("history.json"))
+}
+
+/// List previously analyzed runs (most recent first).
+#[tauri::command]
+fn list_history(app: tauri::AppHandle) -> Result<Vec<HistoryEntry>, String> {
+    let p = history_path(&app)?;
+    if !p.exists() {
+        return Ok(vec![]);
+    }
+    let txt = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+    Ok(serde_json::from_str(&txt).unwrap_or_default())
+}
+
+/// Persist a completed run's metadata; returns the updated list (newest first).
+#[tauri::command]
+fn record_run(app: tauri::AppHandle, entry: HistoryEntry) -> Result<Vec<HistoryEntry>, String> {
+    let p = history_path(&app)?;
+    let mut cur: Vec<HistoryEntry> = if p.exists() {
+        std::fs::read_to_string(&p)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+    cur.retain(|e| e.cache_dir != entry.cache_dir);
+    cur.insert(0, entry);
+    cur.truncate(50);
+    let body = serde_json::to_string_pretty(&cur).map_err(|e| e.to_string())?;
+    std::fs::write(&p, body).map_err(|e| e.to_string())?;
+    Ok(cur)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -70,7 +118,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![analyze_path])
+        .invoke_handler(tauri::generate_handler![analyze_path, list_history, record_run])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

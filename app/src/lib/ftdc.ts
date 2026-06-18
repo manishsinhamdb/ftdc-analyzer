@@ -220,6 +220,13 @@ export function flattenObject(obj: unknown, prefix = ""): { key: string; value: 
   return rows;
 }
 
+export interface RunHistoryEntry {
+  hostname: string;
+  timestamp: string;
+  source_path: string;
+  cache_dir: string;
+}
+
 /** Preferred master series for the global range selector; falls back to first
  *  series with data if absent. */
 export const MASTER_SERIES = "disk_util_pct";
