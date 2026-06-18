@@ -549,6 +549,32 @@ def build_insights(sig_stats):
             "detail": f"extra_info.page_faults p95 = {_r3(pf)}/s.",
             "metric": "page_faults_ps.p95", "value": _r3(pf), "threshold": 10})
 
+    # query efficiency — Atlas Query Targeting proxy (docs examined per returned)
+    de = g("docs_examined_per_returned", "p95")
+    if de is not None:
+        status = "WARN" if de > 100 else "OK"
+        out.append({
+            "id": "query_efficiency", "title": "Query efficiency", "status": status,
+            "headline": ("Workload scanning many docs per returned — likely missing or "
+                         "non-selective indexes" if status != "OK"
+                         else "Query targeting healthy (≈1:1 examined-to-returned)"),
+            "detail": (f"docs examined per returned p95 = {_r3(de)}×. This is a host-wide "
+                       "PROXY; the specific offending queries need the Query Profiler / "
+                       "slow-query log, which FTDC does not capture."),
+            "metric": "docs_examined_per_returned.p95", "value": _r3(de), "threshold": 100})
+
+    # replication — max secondary lag (oplog-window WARN gated on availability, omitted here)
+    lag = g("repl_lag_s", "p95")
+    if lag is not None:
+        status = "WARN" if lag > 10 else "OK"
+        out.append({
+            "id": "replication", "title": "Replication", "status": status,
+            "headline": ("Secondary replication lag elevated" if status != "OK"
+                         else "Replication lag healthy"),
+            "detail": (f"max secondary lag p95 = {_r3(lag)}s. Oplog window/headroom not "
+                       "evaluated (oplog entry timestamps are not in FTDC)."),
+            "metric": "repl_lag_s.p95", "value": _r3(lag), "threshold": 10})
+
     return out
 
 
