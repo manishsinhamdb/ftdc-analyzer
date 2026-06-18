@@ -2,6 +2,7 @@ import { Database, FolderOpen, Loader2, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface Props {
+  username: string;
   selectedPath: string | null;
   analyzing: boolean;
   demoAvailable: boolean;
@@ -18,6 +19,7 @@ const STEPS = [
 ];
 
 export function Landing({
+  username,
   selectedPath,
   analyzing,
   demoAvailable,
@@ -34,6 +36,9 @@ export function Landing({
           <div className="mx-auto flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
             <Database className="size-6" />
           </div>
+          {username && (
+            <p className="text-sm font-medium text-primary">Hi {username} :)</p>
+          )}
           <h1 className="text-2xl font-bold">FTDC Analyzer</h1>
           <p className="mx-auto max-w-md text-sm text-muted-foreground">
             Analyze a MongoDB diagnostic.data folder — Atlas-style metrics + an automated

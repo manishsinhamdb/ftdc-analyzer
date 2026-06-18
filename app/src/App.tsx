@@ -233,6 +233,7 @@ export default function App() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [demoAvailable, setDemoAvailable] = useState(false);
+  const [username, setUsername] = useState<string>("");
   const [collapsed, setCollapsed] = useState(false); // sidebar rail (in-session)
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
   // Opt-in gate for the Automated Assessment. Default OFF so the default view is
@@ -259,6 +260,9 @@ export default function App() {
     invoke<RunHistoryEntry[]>("list_history")
       .then((h) => setHistory(h))
       .catch(() => setHistory([]));
+    invoke<string>("get_username")
+      .then((u) => setUsername(u))
+      .catch(() => setUsername(""));
   }, []);
 
   function loadHistoryEntry(entry: RunHistoryEntry) {
@@ -379,6 +383,7 @@ export default function App() {
     return (
       <>
         <Landing
+          username={username}
           selectedPath={selectedPath}
           analyzing={analyzing}
           demoAvailable={demoAvailable}
