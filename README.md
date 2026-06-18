@@ -70,8 +70,10 @@ Customer data never leaves the laptop.
 - **macOS** (Apple Silicon or Intel — the build computes the right target triple from
   `uname -m`).
 - **Python 3.10+** (`python3`)
-- **Node 18+** (`npm`)
+- **Node 20.19+ / 22.12+ (LTS 22 recommended)** (`npm`)
 - **Rust** (stable, via [rustup](https://rustup.rs))
+- **Xcode Command Line Tools** (`xcode-select --install`) — provides the C toolchain/linker
+  needed for the Rust compile and the macOS `.dmg` bundling step.
 - **PyInstaller** — installed automatically into `.venv` by `make setup` / `make sidecar`.
 
 `make setup` creates a `.venv`, runs `pip install -e .`, and `npm ci` in `./app`. The build
