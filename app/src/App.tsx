@@ -226,14 +226,8 @@ function HwPill({ children }: { children: ReactNode }) {
   );
 }
 
-// Read a JSON file from either the bundled public dir (dir===null, via fetch) or
-// a live engine-run dir (via the Tauri fs plugin).
-async function readJson<T>(dir: string | null, file: string): Promise<T> {
-  if (dir === null) {
-    const r = await fetch("/" + file);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return (await r.json()) as T;
-  }
+// Read a JSON file from a live engine-run dir (via the Tauri fs plugin).
+async function readJson<T>(dir: string, file: string): Promise<T> {
   const txt = await readTextFile(`${dir}/${file}`);
   return JSON.parse(txt) as T;
 }
@@ -246,12 +240,11 @@ export default function App() {
   const [activeCat, setActiveCat] = useState<string>("");
   const [metricsFull, setMetricsFull] = useState<MetricsFull | null>(null);
   const [mfLoading, setMfLoading] = useState(false);
-  // Data source: null dir = bundled demo (public/), else a live engine-run dir.
+  // Data source: the live engine-run dir for the loaded run (null = nothing loaded).
   const [dataDir, setDataDir] = useState<string | null>(null);
   const [sourceLabel, setSourceLabel] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [demoAvailable, setDemoAvailable] = useState(false);
   const [username, setUsername] = useState<string>("");
   const [collapsed, setCollapsed] = useState(false); // sidebar rail (in-session)
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
@@ -260,9 +253,8 @@ export default function App() {
   // local-LLM assessment run (today it just reveals the deterministic pass).
   const [generateAssessment, setGenerateAssessment] = useState(false);
 
-  async function loadFrom(dir: string | null, label: string) {
-    const file = dir === null ? "sample_results.json" : "results.json";
-    const d = await readJson<FtdcResults>(dir, file);
+  async function loadFrom(dir: string, label: string) {
+    const d = await readJson<FtdcResults>(dir, "results.json");
     setData(d);
     setDataDir(dir);
     setSourceLabel(label);
@@ -270,12 +262,8 @@ export default function App() {
     setError(null);
   }
 
-  // Privacy-first: do NOT auto-load anything. Just probe whether a local demo
-  // sample exists so we can optionally offer it.
+  // Privacy-first: nothing is auto-loaded. Only fetch the username + run history.
   useEffect(() => {
-    fetch("/sample_results.json", { method: "HEAD" })
-      .then((r) => setDemoAvailable(r.ok))
-      .catch(() => setDemoAvailable(false));
     invoke<RunHistoryEntry[]>("list_history")
       .then((h) => setHistory(h))
       .catch(() => setHistory([]));
@@ -301,12 +289,6 @@ export default function App() {
     setError(null);
   }
 
-  function loadDemo() {
-    loadFrom(null, "demo sample")
-      .then(() => setView("overview"))
-      .catch((e) => toast.error(`Demo unavailable: ${String(e)}`));
-  }
-
   // Export HTML -> user-chosen Save location (no writes to the app folder).
   async function exportReport() {
     if (!dataDir) return;
@@ -327,7 +309,7 @@ export default function App() {
 
   // Lazy-load the full metric catalog the first time Explore opens; cache after.
   useEffect(() => {
-    if (view !== "explore" || metricsFull || mfLoading) return;
+    if (view !== "explore" || metricsFull || mfLoading || !dataDir) return;
     setMfLoading(true);
     readJson<MetricsFull>(dataDir, "metrics_full.json")
       .then((d) => setMetricsFull(d))
@@ -405,11 +387,9 @@ export default function App() {
           username={username}
           selectedPath={selectedPath}
           analyzing={analyzing}
-          demoAvailable={demoAvailable}
           error={error}
           onPick={pickFolder}
           onAnalyze={analyze}
-          onLoadDemo={loadDemo}
         />
         <Toaster richColors position="bottom-right" theme="dark" />
       </>
@@ -570,13 +550,6 @@ export default function App() {
                 onClick={exportReport}
               >
                 Export HTML
-              </Button>
-            )}
-            {demoAvailable && (
-              <Button size="sm" variant="ghost" className="h-8 text-xs"
-                      onClick={loadDemo} disabled={analyzing}
-                      title="Loads a pre-analyzed example so you can explore the app without opening your own FTDC.">
-                Load demo sample
               </Button>
             )}
           </div>

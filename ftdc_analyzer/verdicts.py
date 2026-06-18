@@ -819,13 +819,9 @@ def build_results(dirpath, on_skip=None):
 # __main__
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    import shutil
-
     DATA_03 = ("/Users/manishsinha/Desktop/projects/ftdc-analyzer/files/upload/"
                "ludo-prod-mongo-03/diagnostic.data")
     REPORTS = "/Users/manishsinha/Desktop/projects/ftdc-analyzer/reports"
-    APP_DIR = "/Users/manishsinha/Desktop/projects/ftdc-analyzer/app/public"
-    APP_PUBLIC = os.path.join(APP_DIR, "sample_results.json")
 
     # STEP 1 — probe presence
     print("=" * 78)
@@ -865,8 +861,6 @@ if __name__ == "__main__":
         json.dump(metrics_full, fh, separators=(",", ":"))
     size = os.path.getsize(out_path)
     mf_size = os.path.getsize(mf_path)
-    shutil.copyfile(out_path, APP_PUBLIC)
-    shutil.copyfile(mf_path, os.path.join(APP_DIR, "metrics_full.json"))
 
     sigs = results["signals"]
     series = results["series"]
@@ -966,6 +960,6 @@ if __name__ == "__main__":
     print(f"  results.json     : {out_path}")
     print(f"  size on disk     : {size:,} bytes ({size/1024:.1f} KiB)")
     print(f"  metrics_full.json: {mf_path}  ({mf_size:,} bytes)")
-    print(f"  copied to app/public/: sample_results.json + metrics_full.json")
+    print(f"  metrics_full.json: {mf_path} ({mf_size:,} bytes)")
     print(f"  missing_paths    : {results['missing_paths']}")
     print("=" * 78)

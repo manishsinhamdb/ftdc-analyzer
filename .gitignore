@@ -9,6 +9,4 @@ logs/
 reports/
 files/
 node_modules/
-app/public/sample_results.json
-app/public/metrics_full.json
 app/src-tauri/binaries/

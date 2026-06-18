@@ -5,28 +5,18 @@ interface Props {
   username: string;
   selectedPath: string | null;
   analyzing: boolean;
-  demoAvailable: boolean;
   error: string | null;
   onPick: () => void;
   onAnalyze: () => void;
-  onLoadDemo: () => void;
 }
-
-const STEPS = [
-  { n: 1, t: "Open a diagnostic.data folder" },
-  { n: 2, t: "Analyze" },
-  { n: 3, t: "Review the dashboard, charts, and assessment" },
-];
 
 export function Landing({
   username,
   selectedPath,
   analyzing,
-  demoAvailable,
   error,
   onPick,
   onAnalyze,
-  onLoadDemo,
 }: Props) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-6 text-foreground">
@@ -42,7 +32,7 @@ export function Landing({
           <h1 className="text-2xl font-bold">FTDC Analyzer</h1>
           <p className="mx-auto max-w-md text-sm text-muted-foreground">
             Analyze a MongoDB diagnostic.data folder — Atlas-style metrics + an automated
-            first-pass assessment.
+            first-pass assessment. Runs 100% locally.
           </p>
         </div>
 
@@ -78,47 +68,8 @@ export function Landing({
               runs locally.
             </p>
           )}
-          {error && !analyzing && (
-            <p className="text-xs text-destructive">{error}</p>
-          )}
+          {error && !analyzing && <p className="text-xs text-destructive">{error}</p>}
         </div>
-
-        {/* How it works */}
-        <div className="space-y-3">
-          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            How it works
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {STEPS.map((s) => (
-              <div key={s.n} className="rounded-lg border border-border bg-card/50 p-3">
-                <div className="flex size-6 items-center justify-center rounded-full bg-secondary text-xs font-bold text-foreground">
-                  {s.n}
-                </div>
-                <div className="mt-2 text-xs leading-snug text-muted-foreground">{s.t}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Secondary demo */}
-        {demoAvailable && (
-          <div className="space-y-1 text-center">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs text-muted-foreground"
-              onClick={onLoadDemo}
-              disabled={analyzing}
-              title="Loads a pre-analyzed example so you can explore the app without opening your own FTDC."
-            >
-              Load demo sample (local, bundled)
-            </Button>
-            <p className="mx-auto max-w-sm text-[11px] text-muted-foreground/70">
-              Loads a pre-analyzed example so you can explore the app without opening your own
-              FTDC.
-            </p>
-          </div>
-        )}
       </div>
     </div>
   );
