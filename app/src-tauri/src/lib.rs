@@ -111,6 +111,22 @@ fn record_run(app: tauri::AppHandle, entry: HistoryEntry) -> Result<Vec<HistoryE
     Ok(cur)
 }
 
+/// The local macOS username, for a friendly greeting on the landing screen.
+#[tauri::command]
+fn get_username() -> String {
+    std::env::var("USER")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "there".to_string())
+}
+
+/// Copy the run's report.html (in the app cache) to a user-chosen destination.
+#[tauri::command]
+fn save_report(src: String, dest: String) -> Result<(), String> {
+    std::fs::copy(&src, &dest).map_err(|e| format!("could not save report: {e}"))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -118,7 +134,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![analyze_path, list_history, record_run])
+        .invoke_handler(tauri::generate_handler![
+            analyze_path,
+            list_history,
+            record_run,
+            save_report,
+            get_username
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

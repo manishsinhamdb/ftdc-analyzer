@@ -23,7 +23,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { toast, Toaster } from "sonner";
@@ -269,6 +269,24 @@ export default function App() {
       .catch((e) => toast.error(`Demo unavailable: ${String(e)}`));
   }
 
+  // Export HTML -> user-chosen Save location (no writes to the app folder).
+  async function exportReport() {
+    if (!dataDir) return;
+    try {
+      const host = data?.host.hostname ?? "ftdc";
+      const dest = await saveDialog({
+        defaultPath: `${host}-ftdc-report.html`,
+        filters: [{ name: "HTML", extensions: ["html"] }],
+      });
+      if (!dest) return; // user cancelled
+      await invoke("save_report", { src: `${dataDir}/report.html`, dest });
+      toast.success("Report saved");
+      revealItemInDir(dest).catch(() => {});
+    } catch (e) {
+      toast.error(`Export failed: ${String(e)}`);
+    }
+  }
+
   // Lazy-load the full metric catalog the first time Explore opens; cache after.
   useEffect(() => {
     if (view !== "explore" || metricsFull || mfLoading) return;
@@ -455,12 +473,8 @@ export default function App() {
                 variant="ghost"
                 className="h-8 text-xs"
                 disabled={analyzing}
-                title="Reveal the self-contained HTML report for this run in Finder"
-                onClick={() =>
-                  revealItemInDir(`${dataDir}/report.html`).catch((e) =>
-                    toast.error(`Export failed: ${String(e)}`),
-                  )
-                }
+                title="Save the self-contained HTML report to a folder you choose"
+                onClick={exportReport}
               >
                 Export HTML
               </Button>
