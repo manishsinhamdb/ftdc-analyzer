@@ -1,0 +1,42 @@
+name: release
+
+# On pushing a tag like v1.2.3, build the macOS app and attach the .dmg to a
+# GitHub Release. (ci.yml remains the per-PR build check.)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos-release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build sidecar + desktop app (.dmg/.app)
+        run: make app
+
+      - name: List bundles
+        run: ls -la app/src-tauri/target/release/bundle/dmg/ app/src-tauri/target/release/bundle/macos/
+
+      - name: Attach .dmg to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/src-tauri/target/release/bundle/dmg/*.dmg
+          fail_on_unmatched_files: true
+          generate_release_notes: true
