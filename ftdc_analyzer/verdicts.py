@@ -58,6 +58,15 @@ UNITS = {
     "keys_examined_per_returned": "x", "docs_examined_per_returned": "x",
     "repl_lag_member_0_s": "s", "repl_lag_member_1_s": "s", "repl_lag_member_2_s": "s",
     "cursors_open": "count", "cursors_timed_out_ps": "/s",
+    # --- additive (Part 2): asserts / queue / checkpoint / eviction / log / cursors / ttl ---
+    "asserts_regular_ps": "/s", "asserts_warning_ps": "/s", "asserts_msg_ps": "/s",
+    "asserts_user_ps": "/s", "asserts_rollovers_ps": "/s",
+    "queued_total": "count", "active_clients_total": "count",
+    "wt_checkpoint_recent_ms": "ms", "wt_checkpoint_min_ms": "ms", "wt_checkpoint_max_ms": "ms",
+    "wt_modified_evict_ps": "pages/s", "wt_unmodified_evict_ps": "pages/s",
+    "wt_log_bytes_mbps": "MB/s", "wt_log_write_ops_ps": "/s", "wt_log_sync_ps": "/s",
+    "cursors_no_timeout": "count", "cursors_pinned": "count",
+    "ttl_deleted_ps": "docs/s", "ttl_passes_ps": "/s",
 }
 
 
@@ -338,6 +347,10 @@ MEAN_SET = {
     "active_clients_readers", "active_clients_writers",
     "repl_buffer_mb", "procs_running", "procs_blocked", "queue_depth",
     "cursors_open",
+    # --- additive (Part 2) gauges ---
+    "queued_total", "active_clients_total",
+    "wt_checkpoint_recent_ms", "wt_checkpoint_min_ms", "wt_checkpoint_max_ms",
+    "cursors_no_timeout", "cursors_pinned",
 }
 
 MAX_POINTS = 2500
@@ -351,7 +364,17 @@ def _sc(key, label, ref_line=None, ref_label=None):
     return e
 
 
-# Data-driven Atlas-style catalog. Charts/series are filtered to what exists.
+# Per-source placeholder messages for scaffolding charts whose data needs a source
+# FTDC does not contain. Named so the message tells the user exactly what to provide.
+PLACEHOLDER_HEALTHCHECK = ("Data not available — upload the healthcheck snapshot "
+                           "(getMongoData.js output) to populate this.")
+PLACEHOLDER_PROFILER = ("Data not available — upload the MongoDB slow-query log / "
+                        "profiler output to populate this.")
+
+# Data-driven Atlas-style catalog. Each chart carries an implicit data_state of
+# "present" (render real series) unless it declares "requires_input" (needs a source
+# not yet ingested) or "unavailable_version" (metric not emitted on this server
+# version). build_results resolves the state + placeholder text at assembly time.
 CHART_CATALOG = [
     {"category": "Operations", "charts": [
         {"title": "Opcounters", "unit": "/s", "series": [
@@ -366,6 +389,8 @@ CHART_CATALOG = [
         {"title": "Scan-and-order / write conflicts", "unit": "/s", "series": [
             _sc("scan_and_order_ps", "scanAndOrder"),
             _sc("write_conflicts_ps", "writeConflicts")]},
+        {"title": "TTL deletes", "unit": "/s", "series": [
+            _sc("ttl_deleted_ps", "docs deleted/s"), _sc("ttl_passes_ps", "passes/s")]},
     ]},
     {"category": "Latency", "charts": [
         {"title": "Operation latency", "unit": "ms", "series": [
@@ -378,6 +403,10 @@ CHART_CATALOG = [
             _sc("docs_examined_per_returned", "docs/returned", 1, "1:1 ideal")]},
         {"title": "Scan & Order", "unit": "/s", "series": [
             _sc("scan_and_order_ps", "scanAndOrder/s")]},
+        {"title": "Index & document scans", "unit": "/s", "series": [
+            _sc("keys_scanned_ps", "keys scanned"),
+            _sc("objs_scanned_ps", "objects scanned"),
+            _sc("scan_and_order_ps", "scanAndOrder")]},
         {"title": "Document Metrics", "unit": "/s", "series": [
             _sc("docs_returned_ps", "returned"), _sc("docs_inserted_ps", "inserted"),
             _sc("docs_updated_ps", "updated"), _sc("docs_deleted_ps", "deleted")]},
@@ -397,7 +426,8 @@ CHART_CATALOG = [
         {"title": "Network requests", "unit": "/s", "series": [
             _sc("net_requests_ps", "requests/s")]},
         {"title": "Cursors", "unit": "", "series": [
-            _sc("cursors_open", "open"), _sc("cursors_timed_out_ps", "timed out/s")]},
+            _sc("cursors_open", "open"), _sc("cursors_no_timeout", "no-timeout"),
+            _sc("cursors_pinned", "pinned"), _sc("cursors_timed_out_ps", "timed out/s")]},
     ]},
     {"category": "Memory", "charts": [
         {"title": "Process memory", "unit": "GB", "series": [
@@ -421,6 +451,15 @@ CHART_CATALOG = [
         {"title": "Ticket utilization", "unit": "%", "series": [
             _sc("read_ticket_util_pct", "read %"),
             _sc("write_ticket_util_pct", "write %", 90, "90%")]},
+        {"title": "Cache eviction", "unit": "pages/s", "series": [
+            _sc("wt_app_evict_ps", "app-thread"),
+            _sc("wt_modified_evict_ps", "modified"),
+            _sc("wt_unmodified_evict_ps", "unmodified")]},
+        {"title": "WiredTiger log ops", "unit": "/s", "series": [
+            _sc("wt_log_write_ops_ps", "log writes"),
+            _sc("wt_log_sync_ps", "log syncs")]},
+        {"title": "WiredTiger log throughput", "unit": "MB/s", "series": [
+            _sc("wt_log_bytes_mbps", "log bytes")]},
     ]},
     {"category": "CPU", "charts": [
         {"title": "CPU breakdown", "unit": "%", "series": [
@@ -444,6 +483,9 @@ CHART_CATALOG = [
             _sc("queue_depth", "queue depth")]},
         {"title": "Checkpoint running", "unit": "0/1", "series": [
             _sc("wt_checkpoint_running", "checkpoint running")]},
+        {"title": "Checkpoint duration", "unit": "ms", "series": [
+            _sc("wt_checkpoint_recent_ms", "most recent"),
+            _sc("wt_checkpoint_max_ms", "max")]},
     ]},
     {"category": "Replication", "charts": [
         {"title": "Replication lag", "unit": "s", "series": [
@@ -473,6 +515,45 @@ CHART_CATALOG = [
             _sc("stale_config_errors_ps", "stale config errors/s")]},
         {"title": "Read latency", "unit": "ms", "series": [
             _sc("oplat_read_ms", "read latency ms")]},
+    ]},
+    {"category": "Errors & Asserts", "charts": [
+        {"title": "Asserts", "unit": "/s", "series": [
+            _sc("asserts_regular_ps", "regular"), _sc("asserts_warning_ps", "warning"),
+            _sc("asserts_msg_ps", "msg"), _sc("asserts_user_ps", "user"),
+            _sc("asserts_rollovers_ps", "rollovers")]},
+        {"title": "Queued operations (global lock)", "unit": "", "series": [
+            _sc("read_queue", "readers"), _sc("write_queue", "writers"),
+            _sc("queued_total", "total")]},
+        {"title": "Active clients (global lock)", "unit": "", "series": [
+            _sc("active_clients_readers", "readers"),
+            _sc("active_clients_writers", "writers"),
+            _sc("active_clients_total", "total")]},
+        # Flow control is emitted only on MongoDB 4.2+ — version-gated placeholder.
+        {"title": "Flow control (write throttling)", "unit": "ms",
+         "data_state": "unavailable_version", "min_version": "4.2", "series": [
+            _sc("flow_control_time_ms", "time in flow control")]},
+    ]},
+    # --- Part 3 scaffolding: the full universe of useful charts whose data needs a
+    # source FTDC does not contain. Rendered as labeled placeholders until ingested. ---
+    {"category": "Indexes & Storage", "charts": [
+        {"title": "Index usage & unused indexes", "unit": "", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+        {"title": "Per-collection storage size", "unit": "GB", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+        {"title": "Cache fit (working set vs cache)", "unit": "%", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+        {"title": "Oplog window", "unit": "h", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+        {"title": "Collection fragmentation", "unit": "%", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+    ]},
+    {"category": "Query Profiler", "charts": [
+        {"title": "Per-namespace latency", "unit": "ms", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_PROFILER},
+        {"title": "Slowest individual queries", "unit": "ms", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_PROFILER},
+        {"title": "COLLSCAN identification", "unit": "", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_PROFILER},
     ]},
 ]
 
@@ -820,18 +901,36 @@ def build_results(dirpath, on_skip=None):
         tt, vv = downsample(ts_aligned, arr, agg) if arr is not None else ([], [])
         series_block[key] = {"t": tt, "v": vv}
 
-    # chart_catalog filtered to charts whose series keys actually have data.
+    # chart_catalog resolves each chart's data_state:
+    #   present            -> keep only series with data; drop the chart if none
+    #   requires_input     -> always render as a placeholder (needs an un-ingested source)
+    #   unavailable_version-> always render; metric not emitted on this server version
     def _has_data(key):
         sb = series_block.get(key)
         return bool(sb and sb["t"])
 
+    version = meta.get("version") or "this version"
+
+    def _resolve_chart(ch):
+        state = ch.get("data_state", "present")
+        if state == "present":
+            ser = [e for e in ch["series"] if _has_data(e["key"])]
+            if not ser:
+                return None
+            return {"title": ch["title"], "unit": ch["unit"], "series": ser,
+                    "data_state": "present"}
+        if state == "unavailable_version":
+            minv = ch.get("min_version", "a newer version")
+            msg = (f"Not available on MongoDB {version} — this metric is emitted "
+                   f"on {minv}+.")
+        else:  # requires_input
+            msg = ch.get("placeholder", "Data not available for this source.")
+        return {"title": ch["title"], "unit": ch["unit"], "series": [],
+                "data_state": state, "placeholder": msg}
+
     chart_catalog = []
     for cat in CHART_CATALOG:
-        charts = []
-        for ch in cat["charts"]:
-            ser = [e for e in ch["series"] if _has_data(e["key"])]
-            if ser:
-                charts.append({"title": ch["title"], "unit": ch["unit"], "series": ser})
+        charts = [rc for rc in (_resolve_chart(ch) for ch in cat["charts"]) if rc]
         if charts:
             chart_catalog.append({"category": cat["category"], "charts": charts})
 

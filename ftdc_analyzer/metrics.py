@@ -58,6 +58,23 @@ CANDIDATE_PATHS = [
     "systemMetrics.cpu.procs_running",
     "systemMetrics.cpu.procs_blocked",
     "systemMetrics.disks.nvme1n1.io_in_progress",
+    # --- additive (Part 2): errors/asserts, queue, checkpoint, eviction, log,
+    # cursors, ttl. Absent paths simply yield None signals (graceful). ---
+    "serverStatus.asserts.rollovers",
+    "serverStatus.globalLock.currentQueue.total",
+    "serverStatus.globalLock.activeClients.total",
+    "serverStatus.wiredTiger.transaction.transaction checkpoint most recent time (msecs)",
+    "serverStatus.wiredTiger.transaction.transaction checkpoint min time (msecs)",
+    "serverStatus.wiredTiger.transaction.transaction checkpoint max time (msecs)",
+    "serverStatus.wiredTiger.cache.modified pages evicted",
+    "serverStatus.wiredTiger.cache.unmodified pages evicted",
+    "serverStatus.wiredTiger.log.log bytes written",
+    "serverStatus.wiredTiger.log.log write operations",
+    "serverStatus.wiredTiger.log.log sync operations",
+    "serverStatus.metrics.cursor.open.noTimeout",
+    "serverStatus.metrics.cursor.open.pinned",
+    "serverStatus.metrics.ttl.deletedDocuments",
+    "serverStatus.metrics.ttl.passes",
 ]
 
 
@@ -463,6 +480,37 @@ def derive(ex):
     # --- GROUP 3: Cursors ---
     sig["cursors_open"] = gauge("serverStatus.metrics.cursor.open.total")
     sig["cursors_timed_out_ps"] = rate("serverStatus.metrics.cursor.timedOut")
+    sig["cursors_no_timeout"] = gauge("serverStatus.metrics.cursor.open.noTimeout")
+    sig["cursors_pinned"] = gauge("serverStatus.metrics.cursor.open.pinned")
+
+    # --- GROUP 4: Errors & Asserts (per-type rates) ---
+    for f in ["regular", "warning", "msg", "user", "rollovers"]:
+        sig[f"asserts_{f}_ps"] = rate(f"serverStatus.asserts.{f}")
+
+    # --- GROUP 4: global-lock queued operations (gauges) ---
+    sig["queued_total"] = gauge("serverStatus.globalLock.currentQueue.total")
+    sig["active_clients_total"] = gauge("serverStatus.globalLock.activeClients.total")
+
+    # --- WiredTiger checkpoint duration (gauges, ms) ---
+    sig["wt_checkpoint_recent_ms"] = gauge(
+        "serverStatus.wiredTiger.transaction.transaction checkpoint most recent time (msecs)")
+    sig["wt_checkpoint_min_ms"] = gauge(
+        "serverStatus.wiredTiger.transaction.transaction checkpoint min time (msecs)")
+    sig["wt_checkpoint_max_ms"] = gauge(
+        "serverStatus.wiredTiger.transaction.transaction checkpoint max time (msecs)")
+
+    # --- WiredTiger cache eviction composition (rates) ---
+    sig["wt_modified_evict_ps"] = rate("serverStatus.wiredTiger.cache.modified pages evicted")
+    sig["wt_unmodified_evict_ps"] = rate("serverStatus.wiredTiger.cache.unmodified pages evicted")
+
+    # --- WiredTiger log throughput ---
+    sig["wt_log_bytes_mbps"] = srate("serverStatus.wiredTiger.log.log bytes written", 1.0 / 1e6)
+    sig["wt_log_write_ops_ps"] = rate("serverStatus.wiredTiger.log.log write operations")
+    sig["wt_log_sync_ps"] = rate("serverStatus.wiredTiger.log.log sync operations")
+
+    # --- TTL background deletes ---
+    sig["ttl_deleted_ps"] = rate("serverStatus.metrics.ttl.deletedDocuments")
+    sig["ttl_passes_ps"] = rate("serverStatus.metrics.ttl.passes")
 
     return sig, n
 
