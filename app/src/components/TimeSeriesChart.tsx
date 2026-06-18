@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Maximize2 } from "lucide-react";
+import { Lock, Maximize2, Upload } from "lucide-react";
 import {
   CartesianGrid,
   Line,
@@ -16,6 +16,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -177,7 +178,7 @@ export function ChartModal({
   const data = mergeSeries(series, present, range);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[88vh] w-[92vw] max-w-[92vw] flex-col">
+      <DialogContent className="flex h-[88vh] max-h-[88vh] w-[92vw] max-w-[92vw] flex-col sm:max-w-[92vw]">
         <DialogHeader>
           <DialogTitle className="text-base">{spec.title}</DialogTitle>
         </DialogHeader>
@@ -188,7 +189,7 @@ export function ChartModal({
             presentLines={presentLines}
             range={range}
             unit={unit}
-            className="min-h-0 w-full flex-1"
+            className="aspect-auto min-h-0 w-full flex-1"
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -252,7 +253,7 @@ export function TimeSeriesChart({ spec, series, range, description, className }:
               presentLines={presentLines}
               range={range}
               unit={unit}
-              className="h-[280px] w-full"
+              className="aspect-auto h-[280px] w-full"
             />
           )}
         </CardContent>
@@ -266,5 +267,48 @@ export function TimeSeriesChart({ spec, series, range, description, className }:
         onOpenChange={setMaximized}
       />
     </>
+  );
+}
+
+// Placeholder tile for catalog charts whose data_state is not "present". Same card
+// chrome + category grouping as a real chart, but no maximize/range controls — it
+// states exactly which source to provide to populate it.
+export function ChartPlaceholder({
+  spec,
+  className,
+}: {
+  spec: ChartSpec;
+  className?: string;
+}) {
+  const versionGated = spec.data_state === "unavailable_version";
+  return (
+    <Card className={className}>
+      <CardHeader className="pb-2">
+        <div className="flex items-start justify-between gap-2">
+          <CardTitle className="text-sm font-semibold text-muted-foreground">
+            {spec.title}
+          </CardTitle>
+          <Badge
+            variant="outline"
+            className="shrink-0 gap-1 text-[10px] font-normal text-muted-foreground"
+          >
+            {versionGated ? <Lock className="size-3" /> : <Upload className="size-3" />}
+            {versionGated ? "version-gated" : "needs data"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="flex h-[280px] flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border bg-secondary/10 px-6 text-center">
+          {versionGated ? (
+            <Lock className="size-7 text-muted-foreground/40" />
+          ) : (
+            <Upload className="size-7 text-muted-foreground/40" />
+          )}
+          <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+            {spec.placeholder ?? "Data not available for this chart."}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

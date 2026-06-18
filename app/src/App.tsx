@@ -51,7 +51,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-import { TimeSeriesChart } from "@/components/TimeSeriesChart";
+import { TimeSeriesChart, ChartPlaceholder } from "@/components/TimeSeriesChart";
 import { SignalsTable, type Thresholds } from "@/components/SignalsTable";
 import { RangeSelector } from "@/components/RangeSelector";
 import { InsightsStrip } from "@/components/InsightsStrip";
@@ -80,6 +80,7 @@ import {
   VERDICT_COLORS,
   fmtNum,
   fmtSpan,
+  historyEntryLabels,
 } from "@/lib/ftdc";
 
 type View = "overview" | "inference" | "charts" | "signals" | "system" | "explore";
@@ -246,20 +247,29 @@ export default function App() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [username, setUsername] = useState<string>("");
-  const [collapsed, setCollapsed] = useState(false); // sidebar rail (in-session)
+  // Sidebar rail. Persisted to localStorage so the choice survives navigation,
+  // returning to the landing screen, and app relaunch.
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("ftdc.sidebarCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
   // Opt-in gate for the Automated Assessment. Default OFF so the default view is
   // unbiased. HOOK POINT: when wired, flipping this on should trigger the future
   // local-LLM assessment run (today it just reveals the deterministic pass).
   const [generateAssessment, setGenerateAssessment] = useState(false);
 
-  async function loadFrom(dir: string, label: string) {
+  async function loadFrom(dir: string, label: string): Promise<FtdcResults> {
     const d = await readJson<FtdcResults>(dir, "results.json");
     setData(d);
     setDataDir(dir);
     setSourceLabel(label);
     setMetricsFull(null); // re-lazy-load from the new source on next Explore open
     setError(null);
+    return d;
   }
 
   // Privacy-first: nothing is auto-loaded. Only fetch the username + run history.
@@ -271,6 +281,28 @@ export default function App() {
       .then((u) => setUsername(u))
       .catch(() => setUsername(""));
   }, []);
+
+  // Persist the sidebar collapsed choice across relaunches.
+  useEffect(() => {
+    try {
+      localStorage.setItem("ftdc.sidebarCollapsed", collapsed ? "1" : "0");
+    } catch {
+      /* localStorage unavailable — fall back to in-session only */
+    }
+  }, [collapsed]);
+
+  // The sidebar width animates (200ms). Recharts' ResponsiveContainer measures its
+  // own box, so nudge it to re-measure the now-wider/narrower content area across the
+  // transition — otherwise charts only repaint on a real window resize.
+  useEffect(() => {
+    const tick = () => window.dispatchEvent(new Event("resize"));
+    const id = window.setInterval(tick, 50);
+    const stop = window.setTimeout(() => window.clearInterval(id), 300);
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(stop);
+    };
+  }, [collapsed]);
 
   function loadHistoryEntry(entry: RunHistoryEntry) {
     loadFrom(entry.cache_dir, `${entry.hostname} (history)`)
@@ -340,7 +372,7 @@ export default function App() {
       const res = await invoke<{ dir: string; hostname: string }>("analyze_path", {
         path: selectedPath,
       });
-      await loadFrom(res.dir, `${res.hostname} (live)`);
+      const loaded = await loadFrom(res.dir, `${res.hostname} (live)`);
       setView("overview");
       toast.success(`Analyzed ${res.hostname}`);
       const entry: RunHistoryEntry = {
@@ -348,6 +380,9 @@ export default function App() {
         timestamp: new Date().toISOString(),
         source_path: selectedPath,
         cache_dir: res.dir,
+        role: loaded.host.cluster_role ?? loaded.host.role ?? null,
+        first_ts: loaded.capture.first_ts_iso,
+        last_ts: loaded.capture.last_ts_iso,
       };
       invoke<RunHistoryEntry[]>("record_run", { entry })
         .then((h) => setHistory(h))
@@ -390,6 +425,8 @@ export default function App() {
           error={error}
           onPick={pickFolder}
           onAnalyze={analyze}
+          history={history}
+          onSelectHistory={loadHistoryEntry}
         />
         <Toaster richColors position="bottom-right" theme="dark" />
       </>
@@ -401,7 +438,7 @@ export default function App() {
       {/* Sidebar (collapsible to an icon rail) — fixed full height, never scrolls with content */}
       <aside
         className={
-          "hidden h-screen shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex " +
+          "hidden h-screen shrink-0 flex-col border-r border-sidebar-border bg-sidebar transition-[width] duration-200 ease-in-out md:flex " +
           (collapsed ? "w-14" : "w-60")
         }
       >
@@ -454,7 +491,11 @@ export default function App() {
           <button
             onClick={() => setCollapsed((c) => !c)}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="flex items-center justify-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/50"
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className={
+              "flex items-center rounded-md border border-sidebar-border text-xs font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-foreground " +
+              (collapsed ? "justify-center px-2 py-2" : "justify-start gap-2 px-3 py-2")
+            }
           >
             {collapsed ? <PanelLeftOpen className="size-4" /> : (
               <>
@@ -516,18 +557,21 @@ export default function App() {
                   No past runs yet. Analyze a folder to build history.
                 </div>
               ) : (
-                history.map((e) => (
-                  <DropdownMenuItem
-                    key={e.cache_dir}
-                    onClick={() => loadHistoryEntry(e)}
-                    className="flex flex-col items-start gap-0.5"
-                  >
-                    <span className="text-xs font-medium">{e.hostname}</span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {new Date(e.timestamp).toLocaleString()}
-                    </span>
-                  </DropdownMenuItem>
-                ))
+                history.map((e) => {
+                  const lbl = historyEntryLabels(e);
+                  return (
+                    <DropdownMenuItem
+                      key={e.cache_dir}
+                      onClick={() => loadHistoryEntry(e)}
+                      className="flex flex-col items-start gap-0.5"
+                    >
+                      <span className="text-xs font-medium">{lbl.title}</span>
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        {lbl.range ? `${lbl.range} · ` : ""}{lbl.when}
+                      </span>
+                    </DropdownMenuItem>
+                  );
+                })
               )}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -585,7 +629,7 @@ export default function App() {
         <main className="flex-1 space-y-5 overflow-auto p-6">
           {data && view === "overview" && (
             <>
-              <div className="sticky top-0 z-20 -mx-6 -mt-6 mb-1 bg-background/80 px-6 pb-1 pt-6 backdrop-blur">
+              <div className="sticky top-0 z-30 -mx-6 -mt-6 mb-4 border-b border-border bg-background px-6 pb-3 pt-6">
                 <RangeSelector
                   capture={data.capture}
                   masterSeries={master}
@@ -656,15 +700,20 @@ export default function App() {
               {data.chart_catalog.map((cat) => (
                 <TabsContent key={cat.category} value={cat.category} className="mt-4">
                   <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                    {cat.charts.map((ch) => (
-                      <TimeSeriesChart
-                        key={ch.title}
-                        spec={ch}
-                        series={data.series}
-                        range={effectiveRange}
-                        className={spansTwoCols(ch) ? "xl:col-span-2" : undefined}
-                      />
-                    ))}
+                    {cat.charts.map((ch) => {
+                      const cls = spansTwoCols(ch) ? "xl:col-span-2" : undefined;
+                      return ch.data_state && ch.data_state !== "present" ? (
+                        <ChartPlaceholder key={ch.title} spec={ch} className={cls} />
+                      ) : (
+                        <TimeSeriesChart
+                          key={ch.title}
+                          spec={ch}
+                          series={data.series}
+                          range={effectiveRange}
+                          className={cls}
+                        />
+                      );
+                    })}
                   </div>
                 </TabsContent>
               ))}

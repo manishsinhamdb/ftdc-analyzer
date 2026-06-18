@@ -1,5 +1,6 @@
-import { Database, FolderOpen, Loader2, Play } from "lucide-react";
+import { Clock, Database, FolderOpen, History, Loader2, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { type RunHistoryEntry, historyEntryLabels } from "@/lib/ftdc";
 
 interface Props {
   username: string;
@@ -8,6 +9,8 @@ interface Props {
   error: string | null;
   onPick: () => void;
   onAnalyze: () => void;
+  history: RunHistoryEntry[];
+  onSelectHistory: (entry: RunHistoryEntry) => void;
 }
 
 export function Landing({
@@ -17,6 +20,8 @@ export function Landing({
   error,
   onPick,
   onAnalyze,
+  history,
+  onSelectHistory,
 }: Props) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-6 text-foreground">
@@ -70,6 +75,44 @@ export function Landing({
           )}
           {error && !analyzing && <p className="text-xs text-destructive">{error}</p>}
         </div>
+
+        {/* Recent analyses — restore a past run without re-analyzing. Backed by the
+            persisted history.json, so this survives returning here and app relaunch. */}
+        {history.length > 0 && (
+          <div className="space-y-2 rounded-xl border border-border bg-card p-5">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <History className="size-3.5" /> Recent analyses
+            </div>
+            <div className="space-y-1">
+              {history.slice(0, 8).map((e) => {
+                const lbl = historyEntryLabels(e);
+                return (
+                  <button
+                    key={e.cache_dir}
+                    onClick={() => onSelectHistory(e)}
+                    disabled={analyzing}
+                    title={`Reopen ${lbl.title} — ${e.source_path}`}
+                    className="flex w-full items-center justify-between gap-3 rounded-md border border-transparent px-3 py-2 text-left transition-colors hover:border-border hover:bg-secondary/50 disabled:opacity-50"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium">{lbl.title}</span>
+                      {lbl.range && (
+                        <span className="block truncate text-xs text-muted-foreground">{lbl.range}</span>
+                      )}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-muted-foreground">
+                      <Clock className="size-3" /> {lbl.when}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Opens the cached result instantly (no re-run). Cached data lives in the app cache and
+              may be cleared by macOS over time.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

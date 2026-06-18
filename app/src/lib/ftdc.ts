@@ -69,10 +69,16 @@ export interface ChartSeriesEntry {
   refLabel?: string;
 }
 
+export type ChartDataState = "present" | "requires_input" | "unavailable_version";
+
 export interface ChartSpec {
   title: string;
   unit: string;
   series: ChartSeriesEntry[];
+  // Catalog data-state. Absent ⇒ "present" (real data). Non-present charts render
+  // as placeholder tiles carrying `placeholder` (the exact source to provide).
+  data_state?: ChartDataState;
+  placeholder?: string;
 }
 
 export interface ChartCategory {
@@ -225,6 +231,29 @@ export interface RunHistoryEntry {
   timestamp: string;
   source_path: string;
   cache_dir: string;
+  role?: string | null;
+  first_ts?: string | null;
+  last_ts?: string | null;
+}
+
+/** Human-friendly labels for a history entry: a title (host + role), the capture
+ *  date-range, and when the analysis was run. Used by the landing list and the
+ *  in-app History dropdown so both read consistently. */
+export function historyEntryLabels(e: RunHistoryEntry): {
+  title: string;
+  range: string;
+  when: string;
+} {
+  const role = e.role ? ` · ${e.role}` : "";
+  const fmtDay = (iso?: string | null) =>
+    iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+  const range =
+    e.first_ts && e.last_ts ? `${fmtDay(e.first_ts)} → ${fmtDay(e.last_ts)}` : "";
+  return {
+    title: `${e.hostname}${role}`,
+    range,
+    when: new Date(e.timestamp).toLocaleString(),
+  };
 }
 
 /** Preferred master series for the global range selector; falls back to first

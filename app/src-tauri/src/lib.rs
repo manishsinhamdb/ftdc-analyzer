@@ -69,6 +69,14 @@ struct HistoryEntry {
     timestamp: String,
     source_path: String,
     cache_dir: String,
+    // Optional enrichment for a useful history label; `default` keeps older
+    // history.json files (written before these fields existed) deserializable.
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    first_ts: Option<String>,
+    #[serde(default)]
+    last_ts: Option<String>,
 }
 
 fn history_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
