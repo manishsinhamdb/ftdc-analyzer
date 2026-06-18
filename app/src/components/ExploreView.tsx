@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { Compass, Search } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +28,18 @@ import {
 
 const ALL = "__all__";
 const MAX_SELECT = 4;
+
+// Common metric groups offered as one-click pre-filters (shown only if present).
+const QUICK_PICKS = [
+  "WiredTiger Cache",
+  "System CPU",
+  "System Disks",
+  "System Memory",
+  "Op Latencies",
+  "Replication Status",
+  "TCMalloc",
+  "Network",
+];
 
 function shortLabel(path: string): string {
   return path.split(".").slice(-2).join(".");
@@ -182,6 +194,26 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex flex-wrap gap-1">
+              {QUICK_PICKS.filter((c) => categories.includes(c)).map((c) => (
+                <button
+                  key={c}
+                  onClick={() => {
+                    setQuery("");
+                    setKind(ALL);
+                    setCategory(category === c ? ALL : c);
+                  }}
+                  className={
+                    "rounded-full border px-2 py-0.5 text-[10px] transition-colors " +
+                    (category === c
+                      ? "border-primary bg-primary/20 text-foreground"
+                      : "border-border text-muted-foreground hover:bg-secondary/40")
+                  }
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
             <p className="text-[11px] text-muted-foreground">
               {selected.length}/{MAX_SELECT} selected · click to overlay
             </p>
@@ -245,8 +277,16 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
 
           {selectedMetrics.length === 0 ? (
             <Card>
-              <CardContent className="flex h-[280px] items-center justify-center text-sm text-muted-foreground">
-                Select up to {MAX_SELECT} metrics from the list to chart them.
+              <CardContent className="flex h-[280px] flex-col items-center justify-center gap-3 text-center">
+                <Compass className="size-7 text-muted-foreground/50" />
+                <div className="max-w-md space-y-1">
+                  <div className="text-sm font-semibold">Explore the raw metric catalog</div>
+                  <p className="text-xs text-muted-foreground">
+                    Search {metrics.length.toLocaleString("en-US")} metrics, click up to {MAX_SELECT}{" "}
+                    to overlay them on one chart, and toggle Raw/Rate. Use the quick-picks or
+                    category filter to jump to a group.
+                  </p>
+                </div>
               </CardContent>
             </Card>
           ) : (
