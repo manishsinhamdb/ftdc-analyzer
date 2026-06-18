@@ -10,11 +10,18 @@ import {
   Compass,
   Cpu,
   Database,
+  FolderOpen,
   Gauge,
   HardDrive,
+  Loader2,
   MemoryStick,
+  Play,
   Server,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { readTextFile } from "@tauri-apps/plugin-fs";
+import { toast, Toaster } from "sonner";
 
 import {
   Card,
@@ -24,6 +31,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -174,6 +182,18 @@ function HwPill({ children }: { children: ReactNode }) {
   );
 }
 
+// Read a JSON file from either the bundled public dir (dir===null, via fetch) or
+// a live engine-run dir (via the Tauri fs plugin).
+async function readJson<T>(dir: string | null, file: string): Promise<T> {
+  if (dir === null) {
+    const r = await fetch("/" + file);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return (await r.json()) as T;
+  }
+  const txt = await readTextFile(`${dir}/${file}`);
+  return JSON.parse(txt) as T;
+}
+
 export default function App() {
   const [data, setData] = useState<FtdcResults | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -182,30 +202,70 @@ export default function App() {
   const [activeCat, setActiveCat] = useState<string>("");
   const [metricsFull, setMetricsFull] = useState<MetricsFull | null>(null);
   const [mfLoading, setMfLoading] = useState(false);
+  // Data source: null dir = bundled sample (public/), else a live engine-run dir.
+  const [dataDir, setDataDir] = useState<string | null>(null);
+  const [sourceLabel, setSourceLabel] = useState<string>("bundled sample");
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
 
+  async function loadFrom(dir: string | null, label: string) {
+    const file = dir === null ? "sample_results.json" : "results.json";
+    const d = await readJson<FtdcResults>(dir, file);
+    setData(d);
+    setDataDir(dir);
+    setSourceLabel(label);
+    setMetricsFull(null); // re-lazy-load from the new source on next Explore open
+    setError(null);
+  }
+
+  // Load the bundled sample on first mount.
   useEffect(() => {
-    fetch("/sample_results.json")
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((d: FtdcResults) => setData(d))
-      .catch((e) => setError(String(e)));
+    loadFrom(null, "bundled sample").catch((e) => setError(String(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Lazy-load the full metric catalog the first time Explore opens; cache after.
   useEffect(() => {
     if (view !== "explore" || metricsFull || mfLoading) return;
     setMfLoading(true);
-    fetch("/metrics_full.json")
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((d: MetricsFull) => setMetricsFull(d))
+    readJson<MetricsFull>(dataDir, "metrics_full.json")
+      .then((d) => setMetricsFull(d))
       .catch((e) => setError(String(e)))
       .finally(() => setMfLoading(false));
-  }, [view, metricsFull, mfLoading]);
+  }, [view, metricsFull, mfLoading, dataDir]);
+
+  async function pickFolder() {
+    try {
+      const sel = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Select a diagnostic.data folder (or a parent of host folders)",
+      });
+      if (typeof sel === "string") setSelectedPath(sel);
+    } catch (e) {
+      toast.error(`Folder picker unavailable: ${String(e)}`);
+    }
+  }
+
+  async function analyze() {
+    if (!selectedPath) {
+      toast.error("Pick a folder first.");
+      return;
+    }
+    setAnalyzing(true);
+    try {
+      const res = await invoke<{ dir: string; hostname: string }>("analyze_path", {
+        path: selectedPath,
+      });
+      await loadFrom(res.dir, `${res.hostname} (live)`);
+      setView("overview");
+      toast.success(`Analyzed ${res.hostname}`);
+    } catch (e) {
+      toast.error(`Analysis failed: ${String(e)}`);
+    } finally {
+      setAnalyzing(false);
+    }
+  }
 
   const master = useMemo(() => {
     if (!data) return undefined;
@@ -269,6 +329,37 @@ export default function App() {
 
       {/* Main column */}
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* Source bar — live file picker + analyze + bundled fallback */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-6 py-2.5">
+          <Button size="sm" variant="outline" className="h-8 gap-2 text-xs" onClick={pickFolder}
+                  disabled={analyzing}>
+            <FolderOpen className="size-4" /> Open FTDC data…
+          </Button>
+          <span className="max-w-[34ch] truncate font-mono text-xs text-muted-foreground"
+                title={selectedPath ?? ""}>
+            {selectedPath ?? "no folder selected"}
+          </span>
+          <Button size="sm" className="h-8 gap-2 text-xs" onClick={analyze}
+                  disabled={analyzing || !selectedPath}>
+            {analyzing ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
+            {analyzing ? "Analyzing…" : "Analyze"}
+          </Button>
+          {analyzing && (
+            <span className="text-xs text-muted-foreground">
+              running engine — ~1–2 min for multi-day captures
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">
+              source: <span className="font-medium text-foreground">{sourceLabel}</span>
+            </span>
+            <Button size="sm" variant="ghost" className="h-8 text-xs"
+                    onClick={() => loadFrom(null, "bundled sample").then(() => setView("overview")).catch((e) => toast.error(String(e)))}
+                    disabled={analyzing}>
+              Load bundled sample
+            </Button>
+          </div>
+        </div>
         {/* Topbar */}
         <header className="border-b border-border bg-card/60 px-6 py-4">
           {data ? (
@@ -393,6 +484,7 @@ export default function App() {
           )}
         </main>
       </div>
+      <Toaster richColors position="bottom-right" theme="dark" />
     </div>
   );
 }
