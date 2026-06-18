@@ -54,6 +54,10 @@ UNITS = {
     "active_clients_readers": "count", "active_clients_writers": "count",
     "repl_buffer_mb": "MB", "queue_depth": "count",
     "stale_config_errors_ps": "/s", "wt_checkpoint_running": "0/1",
+    # --- Atlas-parity additions ---
+    "keys_examined_per_returned": "x", "docs_examined_per_returned": "x",
+    "repl_lag_member_0_s": "s", "repl_lag_member_1_s": "s", "repl_lag_member_2_s": "s",
+    "cursors_open": "count", "cursors_timed_out_ps": "/s",
 }
 
 
@@ -364,6 +368,19 @@ CHART_CATALOG = [
     ]},
     {"category": "Latency", "charts": [
         {"title": "Operation latency", "unit": "ms", "series": [
+            _sc("oplat_read_ms", "read"), _sc("oplat_write_ms", "write"),
+            _sc("oplat_cmd_ms", "command")]},
+    ]},
+    {"category": "Query Efficiency", "charts": [
+        {"title": "Query Targeting", "unit": "x", "series": [
+            _sc("keys_examined_per_returned", "keys/returned"),
+            _sc("docs_examined_per_returned", "docs/returned", 1, "1:1 ideal")]},
+        {"title": "Scan & Order", "unit": "/s", "series": [
+            _sc("scan_and_order_ps", "scanAndOrder/s")]},
+        {"title": "Document Metrics", "unit": "/s", "series": [
+            _sc("docs_returned_ps", "returned"), _sc("docs_inserted_ps", "inserted"),
+            _sc("docs_updated_ps", "updated"), _sc("docs_deleted_ps", "deleted")]},
+        {"title": "Operation execution time", "unit": "ms", "series": [
             _sc("oplat_read_ms", "read"), _sc("oplat_write_ms", "write"),
             _sc("oplat_cmd_ms", "command")]},
     ]},

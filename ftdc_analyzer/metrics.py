@@ -440,6 +440,18 @@ def derive(ex):
     sig["wt_checkpoint_running"] = gauge(
         "serverStatus.wiredTiger.transaction.transaction checkpoint currently running")
 
+    # --- GROUP 1: Query Efficiency (Atlas Query Targeting) ---
+    def safe_ratio(num, den):
+        """num/den per bucket; where the denominator rate is ~0 -> NaN (never inf)."""
+        if num is None or den is None:
+            return None
+        den_safe = np.where(den > 0, den, 1.0)  # avoid div-by-zero entirely
+        return np.where(den > 0, num / den_safe, np.nan)
+
+    ret_ps = sig.get("docs_returned_ps")
+    sig["keys_examined_per_returned"] = safe_ratio(sig.get("keys_scanned_ps"), ret_ps)
+    sig["docs_examined_per_returned"] = safe_ratio(sig.get("objs_scanned_ps"), ret_ps)
+
     return sig, n
 
 
