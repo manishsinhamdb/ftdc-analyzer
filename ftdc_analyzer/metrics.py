@@ -130,6 +130,8 @@ def _build_curated():
         P.add(p)
     # Sharding correlation (additive).
     P.add("serverStatus.shardingStatistics.countStaleConfigErrors")
+    # Checkpoint-running indicator (additive) — visualizes checkpoint saturation.
+    P.add("serverStatus.wiredTiger.transaction.transaction checkpoint currently running")
     return P
 
 
@@ -433,6 +435,10 @@ def derive(ex):
     # sharding: stale config error rate
     sig["stale_config_errors_ps"] = rate(
         "serverStatus.shardingStatistics.countStaleConfigErrors")
+
+    # checkpoint-running indicator (0/1 gauge; MAX-agg highlights checkpoint windows)
+    sig["wt_checkpoint_running"] = gauge(
+        "serverStatus.wiredTiger.transaction.transaction checkpoint currently running")
 
     return sig, n
 

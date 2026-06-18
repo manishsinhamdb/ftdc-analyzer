@@ -53,7 +53,7 @@ UNITS = {
     "read_tickets_available": "count", "write_tickets_available": "count",
     "active_clients_readers": "count", "active_clients_writers": "count",
     "repl_buffer_mb": "MB", "queue_depth": "count",
-    "stale_config_errors_ps": "/s",
+    "stale_config_errors_ps": "/s", "wt_checkpoint_running": "0/1",
 }
 
 
@@ -422,6 +422,8 @@ CHART_CATALOG = [
             _sc("read_mbps", "read"), _sc("write_mbps", "write")]},
         {"title": "Disk queue depth", "unit": "", "series": [
             _sc("queue_depth", "queue depth")]},
+        {"title": "Checkpoint running", "unit": "0/1", "series": [
+            _sc("wt_checkpoint_running", "checkpoint running")]},
     ]},
     {"category": "Replication", "charts": [
         {"title": "Replication lag", "unit": "s", "series": [
