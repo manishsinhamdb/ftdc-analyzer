@@ -555,7 +555,8 @@ export default function App() {
             )}
             {demoAvailable && (
               <Button size="sm" variant="ghost" className="h-8 text-xs"
-                      onClick={loadDemo} disabled={analyzing}>
+                      onClick={loadDemo} disabled={analyzing}
+                      title="Loads a pre-analyzed example so you can explore the app without opening your own FTDC.">
                 Load demo sample
               </Button>
             )}

@@ -102,16 +102,21 @@ export function Landing({
 
         {/* Secondary demo */}
         {demoAvailable && (
-          <div className="text-center">
+          <div className="space-y-1 text-center">
             <Button
               variant="ghost"
               size="sm"
               className="text-xs text-muted-foreground"
               onClick={onLoadDemo}
               disabled={analyzing}
+              title="Loads a pre-analyzed example so you can explore the app without opening your own FTDC."
             >
               Load demo sample (local, bundled)
             </Button>
+            <p className="mx-auto max-w-sm text-[11px] text-muted-foreground/70">
+              Loads a pre-analyzed example so you can explore the app without opening your own
+              FTDC.
+            </p>
           </div>
         )}
       </div>
