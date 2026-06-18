@@ -93,8 +93,8 @@ export function RangeSelector({ capture, masterSeries, value, onChange }: Props)
   const windowMs = Math.max(0, value[1] - value[0]);
 
   return (
-    <div className="rounded-lg border border-border bg-card/70 p-3 shadow-sm backdrop-blur">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
+    <div className="rounded-lg border border-border bg-card/70 px-3 py-1.5 shadow-sm backdrop-blur">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="text-xs font-medium text-muted-foreground">Time window</span>
         <div className="flex flex-wrap items-center gap-1 rounded-md border border-border bg-background/40 p-1">
           {PRESETS.filter(
@@ -125,8 +125,8 @@ export function RangeSelector({ capture, masterSeries, value, onChange }: Props)
       </div>
 
       {data.length > 1 ? (
-        <ResponsiveContainer width="100%" height={110}>
-          <AreaChart data={data} margin={{ left: 4, right: 8, top: 4, bottom: 0 }}>
+        <ResponsiveContainer width="100%" height={64}>
+          <AreaChart data={data} margin={{ left: 4, right: 8, top: 2, bottom: 0 }}>
             <defs>
               <linearGradient id="rangeFill" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#4DA6FF" stopOpacity={0.5} />
@@ -146,7 +146,7 @@ export function RangeSelector({ capture, masterSeries, value, onChange }: Props)
             />
             <Brush
               dataKey="t"
-              height={22}
+              height={18}
               travellerWidth={8}
               stroke="#4DA6FF"
               fill="#0D1B2A"

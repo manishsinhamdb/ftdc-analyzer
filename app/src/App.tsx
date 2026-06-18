@@ -481,8 +481,28 @@ export default function App() {
           )}
 
           {data && view === "charts" && (
-            <>
-              <div className="sticky top-0 z-20 -mx-6 -mt-6 mb-1 bg-background/80 px-6 pb-1 pt-6 backdrop-blur">
+            <Tabs
+              value={activeCat || data.chart_catalog[0]?.category || ""}
+              onValueChange={setActiveCat}
+            >
+              {/* Category tabs are the primary control: prominent, full-width, sticky,
+                  above the slim range strip. */}
+              <div className="sticky top-0 z-20 -mx-6 -mt-6 space-y-2 border-b border-border bg-background/95 px-6 pb-2 pt-6 backdrop-blur">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Category
+                </div>
+                <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-card p-1">
+                  {data.chart_catalog.map((cat) => (
+                    <TabsTrigger
+                      key={cat.category}
+                      value={cat.category}
+                      className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+                    >
+                      {cat.category}
+                      <span className="ml-1 opacity-70">({cat.charts.length})</span>
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
                 <RangeSelector
                   capture={data.capture}
                   masterSeries={master}
@@ -491,36 +511,22 @@ export default function App() {
                 />
               </div>
 
-              <Tabs
-                value={activeCat || data.chart_catalog[0]?.category || ""}
-                onValueChange={setActiveCat}
-              >
-                <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 overflow-x-auto">
-                  {data.chart_catalog.map((cat) => (
-                    <TabsTrigger key={cat.category} value={cat.category} className="text-xs">
-                      {cat.category}{" "}
-                      <span className="ml-1 text-muted-foreground">({cat.charts.length})</span>
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-
-                {data.chart_catalog.map((cat) => (
-                  <TabsContent key={cat.category} value={cat.category} className="mt-4">
-                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                      {cat.charts.map((ch) => (
-                        <TimeSeriesChart
-                          key={ch.title}
-                          spec={ch}
-                          series={data.series}
-                          range={effectiveRange}
-                          className={spansTwoCols(ch) ? "xl:col-span-2" : undefined}
-                        />
-                      ))}
-                    </div>
-                  </TabsContent>
-                ))}
-              </Tabs>
-            </>
+              {data.chart_catalog.map((cat) => (
+                <TabsContent key={cat.category} value={cat.category} className="mt-4">
+                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                    {cat.charts.map((ch) => (
+                      <TimeSeriesChart
+                        key={ch.title}
+                        spec={ch}
+                        series={data.series}
+                        range={effectiveRange}
+                        className={spansTwoCols(ch) ? "xl:col-span-2" : undefined}
+                      />
+                    ))}
+                  </div>
+                </TabsContent>
+              ))}
+            </Tabs>
           )}
 
           {data && view === "inference" && data.assessment && (
