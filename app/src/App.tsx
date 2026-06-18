@@ -378,11 +378,11 @@ export default function App() {
   }
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      {/* Sidebar (collapsible to an icon rail) */}
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+      {/* Sidebar (collapsible to an icon rail) — fixed full height, never scrolls with content */}
       <aside
         className={
-          "hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex " +
+          "hidden h-screen shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex " +
           (collapsed ? "w-14" : "w-60")
         }
       >
@@ -398,7 +398,7 @@ export default function App() {
           )}
         </div>
         <Separator className="bg-sidebar-border" />
-        <nav className="flex flex-col gap-1 p-2">
+        <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
           {NAV.map((n) => {
             const Icon = n.icon;
             const active = view === n.view;
