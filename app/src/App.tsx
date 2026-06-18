@@ -15,6 +15,8 @@ import {
   HardDrive,
   Loader2,
   MemoryStick,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Server,
   Sparkles,
@@ -78,13 +80,18 @@ const VERDICT_META: Record<
   disk: { title: "Disk", icon: HardDrive },
 };
 
-const NAV: { label: string; view: View; icon: ComponentType<{ className?: string }> }[] = [
-  { label: "Overview", view: "overview", icon: Gauge },
-  { label: "Inference", view: "inference", icon: Sparkles },
-  { label: "Charts", view: "charts", icon: Activity },
-  { label: "Signals", view: "signals", icon: Database },
-  { label: "System", view: "system", icon: Server },
-  { label: "Explore", view: "explore", icon: Compass },
+const NAV: {
+  label: string;
+  view: View;
+  icon: ComponentType<{ className?: string }>;
+  tip: string;
+}[] = [
+  { label: "Overview", view: "overview", icon: Gauge, tip: "Verdicts, assessment, and headline charts" },
+  { label: "Assessment", view: "inference", icon: Sparkles, tip: "Automated first-pass findings and recommendations" },
+  { label: "Charts", view: "charts", icon: Activity, tip: "All metric charts grouped by category" },
+  { label: "Signals", view: "signals", icon: Database, tip: "Searchable table of every derived signal" },
+  { label: "System", view: "system", icon: Server, tip: "Full host build, OS, and mongod config" },
+  { label: "Explore", view: "explore", icon: Compass, tip: "Browse and chart any of the 1300+ raw metrics" },
 ];
 
 const OVERVIEW_CHART_TITLES = [
@@ -213,6 +220,7 @@ export default function App() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [demoAvailable, setDemoAvailable] = useState(false);
+  const [collapsed, setCollapsed] = useState(false); // sidebar rail (in-session)
 
   async function loadFrom(dir: string | null, label: string) {
     const file = dir === null ? "sample_results.json" : "results.json";
@@ -321,19 +329,26 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
-      {/* Sidebar */}
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
-        <div className="flex items-center gap-2 px-5 py-5">
-          <div className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
+      {/* Sidebar (collapsible to an icon rail) */}
+      <aside
+        className={
+          "hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex " +
+          (collapsed ? "w-14" : "w-60")
+        }
+      >
+        <div className={"flex items-center py-5 " + (collapsed ? "justify-center px-2" : "gap-2 px-5")}>
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Database className="size-4" />
           </div>
-          <div className="leading-tight">
-            <div className="text-sm font-bold">FTDC Analyzer</div>
-            <div className="text-[10px] text-muted-foreground">MongoDB diagnostics</div>
-          </div>
+          {!collapsed && (
+            <div className="leading-tight">
+              <div className="text-sm font-bold">FTDC Analyzer</div>
+              <div className="text-[10px] text-muted-foreground">MongoDB diagnostics</div>
+            </div>
+          )}
         </div>
         <Separator className="bg-sidebar-border" />
-        <nav className="flex flex-col gap-1 p-3">
+        <nav className="flex flex-col gap-1 p-2">
           {NAV.map((n) => {
             const Icon = n.icon;
             const active = view === n.view;
@@ -341,21 +356,36 @@ export default function App() {
               <button
                 key={n.view}
                 onClick={() => setView(n.view)}
+                title={collapsed ? n.label : n.tip}
                 className={
-                  "flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors " +
+                  "flex items-center rounded-md text-left text-sm transition-colors " +
+                  (collapsed ? "justify-center px-2 py-2.5 " : "gap-2 px-3 py-2 ") +
                   (active
                     ? "bg-sidebar-accent font-medium text-foreground"
                     : "text-muted-foreground hover:bg-sidebar-accent/50")
                 }
               >
-                <Icon className="size-4" />
-                {n.label}
+                <Icon className="size-4 shrink-0" />
+                {!collapsed && n.label}
               </button>
             );
           })}
         </nav>
-        <div className="mt-auto p-4 text-[10px] text-muted-foreground">
-          {data ? `schema v${data.schema_version}` : ""}
+        <div className="mt-auto flex flex-col gap-2 p-2">
+          {!collapsed && (
+            <div className="px-2 text-[10px] text-muted-foreground">schema v{data.schema_version}</div>
+          )}
+          <button
+            onClick={() => setCollapsed((c) => !c)}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="flex items-center justify-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/50"
+          >
+            {collapsed ? <PanelLeftOpen className="size-4" /> : (
+              <>
+                <PanelLeftClose className="size-4" /> Collapse
+              </>
+            )}
+          </button>
         </div>
       </aside>
 
