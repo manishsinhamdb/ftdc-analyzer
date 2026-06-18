@@ -152,6 +152,54 @@ function ChartBody({ config, data, presentLines, range, unit, className }: BodyP
   );
 }
 
+// Reusable maximize modal — a controlled full-screen chart. Used by the per-chart
+// maximize button and by the Signals triage table (click-to-chart).
+export function ChartModal({
+  spec,
+  series,
+  range,
+  open,
+  onOpenChange,
+}: {
+  spec: ChartSpec;
+  series: Record<string, SeriesData>;
+  range: [number, number];
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+}) {
+  const unit = spec.unit;
+  const present = presentKeys(series, spec.series.map((l) => l.key));
+  const presentLines = spec.series.filter((l) => present.includes(l.key));
+  const config: ChartConfig = {};
+  presentLines.forEach((l, i) => {
+    config[l.key] = { label: l.label, color: LINE_PALETTE[i % LINE_PALETTE.length] };
+  });
+  const data = mergeSeries(series, present, range);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex h-[88vh] w-[92vw] max-w-[92vw] flex-col">
+        <DialogHeader>
+          <DialogTitle className="text-base">{spec.title}</DialogTitle>
+        </DialogHeader>
+        {presentLines.length > 0 ? (
+          <ChartBody
+            config={config}
+            data={data}
+            presentLines={presentLines}
+            range={range}
+            unit={unit}
+            className="min-h-0 w-full flex-1"
+          />
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            (no data)
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function TimeSeriesChart({ spec, series, range, description, className }: Props) {
   const [maximized, setMaximized] = useState(false);
   const unit = spec.unit;
@@ -210,23 +258,13 @@ export function TimeSeriesChart({ spec, series, range, description, className }:
         </CardContent>
       </Card>
 
-      <Dialog open={maximized} onOpenChange={setMaximized}>
-        <DialogContent className="flex h-[88vh] w-[92vw] max-w-[92vw] flex-col">
-          <DialogHeader>
-            <DialogTitle className="text-base">{spec.title}</DialogTitle>
-          </DialogHeader>
-          {hasData && (
-            <ChartBody
-              config={config}
-              data={data}
-              presentLines={presentLines}
-              range={range}
-              unit={unit}
-              className="min-h-0 w-full flex-1"
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+      <ChartModal
+        spec={spec}
+        series={series}
+        range={range}
+        open={maximized}
+        onOpenChange={setMaximized}
+      />
     </>
   );
 }

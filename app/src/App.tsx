@@ -52,7 +52,7 @@ import {
 } from "@/components/ui/table";
 
 import { TimeSeriesChart } from "@/components/TimeSeriesChart";
-import { SignalsTable } from "@/components/SignalsTable";
+import { SignalsTable, type Thresholds } from "@/components/SignalsTable";
 import { RangeSelector } from "@/components/RangeSelector";
 import { InsightsStrip } from "@/components/InsightsStrip";
 import { SystemView } from "@/components/SystemView";
@@ -124,6 +124,25 @@ function findChart(catalog: FtdcResults["chart_catalog"], title: string): ChartS
 function spansTwoCols(ch: ChartSpec): boolean {
   const t = ch.title.toLowerCase();
   return ch.series.length === 1 && (t.includes("utilization") || t.includes("targeting"));
+}
+
+// Build {signal: {p95?, p99?}} threshold map from the verdict checks so the Signals
+// table can flag percentile values that breach known thresholds.
+function buildThresholds(verdicts: FtdcResults["verdicts"]): Thresholds {
+  const m: Thresholds = {};
+  for (const key of ["ram", "cpu", "disk"] as const) {
+    for (const chk of verdicts[key].checks) {
+      if (chk.threshold == null) continue;
+      const dot = chk.name.lastIndexOf(".");
+      if (dot < 0) continue;
+      const sig = chk.name.slice(0, dot);
+      const stat = chk.name.slice(dot + 1);
+      if (stat === "p95" || stat === "p99") {
+        (m[sig] ??= {})[stat] = chk.threshold;
+      }
+    }
+  }
+  return m;
 }
 
 function StatusCell({ status }: { status: Check["status"] }) {
@@ -704,7 +723,14 @@ export default function App() {
             )
           )}
 
-          {data && view === "signals" && <SignalsTable signals={data.signals} />}
+          {data && view === "signals" && (
+            <SignalsTable
+              signals={data.signals}
+              series={data.series}
+              range={effectiveRange}
+              thresholds={buildThresholds(data.verdicts)}
+            />
+          )}
 
           {data && view === "system" && <SystemView facts={data.facts} />}
 
