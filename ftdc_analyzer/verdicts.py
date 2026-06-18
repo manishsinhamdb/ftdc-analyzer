@@ -337,6 +337,7 @@ MEAN_SET = {
     "read_tickets_out", "write_tickets_out",
     "active_clients_readers", "active_clients_writers",
     "repl_buffer_mb", "procs_running", "procs_blocked", "queue_depth",
+    "cursors_open",
 }
 
 MAX_POINTS = 2500
@@ -395,6 +396,8 @@ CHART_CATALOG = [
             _sc("net_in_mbps", "in"), _sc("net_out_mbps", "out")]},
         {"title": "Network requests", "unit": "/s", "series": [
             _sc("net_requests_ps", "requests/s")]},
+        {"title": "Cursors", "unit": "", "series": [
+            _sc("cursors_open", "open"), _sc("cursors_timed_out_ps", "timed out/s")]},
     ]},
     {"category": "Memory", "charts": [
         {"title": "Process memory", "unit": "GB", "series": [

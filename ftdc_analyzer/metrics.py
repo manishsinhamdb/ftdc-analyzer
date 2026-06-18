@@ -132,6 +132,9 @@ def _build_curated():
     P.add("serverStatus.shardingStatistics.countStaleConfigErrors")
     # Checkpoint-running indicator (additive) — visualizes checkpoint saturation.
     P.add("serverStatus.wiredTiger.transaction.transaction checkpoint currently running")
+    # Cursors (additive).
+    P.add("serverStatus.metrics.cursor.open.total")
+    P.add("serverStatus.metrics.cursor.timedOut")
     return P
 
 
@@ -456,6 +459,10 @@ def derive(ex):
     ret_ps = sig.get("docs_returned_ps")
     sig["keys_examined_per_returned"] = safe_ratio(sig.get("keys_scanned_ps"), ret_ps)
     sig["docs_examined_per_returned"] = safe_ratio(sig.get("objs_scanned_ps"), ret_ps)
+
+    # --- GROUP 3: Cursors ---
+    sig["cursors_open"] = gauge("serverStatus.metrics.cursor.open.total")
+    sig["cursors_timed_out_ps"] = rate("serverStatus.metrics.cursor.timedOut")
 
     return sig, n
 
