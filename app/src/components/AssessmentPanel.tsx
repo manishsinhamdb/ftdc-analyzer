@@ -1,7 +1,13 @@
-import { Sparkles, TrendingDown } from "lucide-react";
+import { Info, Sparkles, TrendingDown } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   type Assessment,
   type CostOptimization,
@@ -66,11 +72,42 @@ export function AssessmentPanel({
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-base">
             <Sparkles className="size-4 text-primary" />
-            First-draft inference
+            Automated Assessment
             <Badge variant="outline" className="ml-1 font-normal text-muted-foreground">
               {assessment.posture}
             </Badge>
+            <TooltipProvider delayDuration={150}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    className="ml-auto text-muted-foreground hover:text-foreground"
+                    aria-label="How to read this assessment"
+                  >
+                    <Info className="size-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-xs leading-relaxed">
+                  <p className="font-semibold">How to read this</p>
+                  <p className="mt-1">
+                    <b>Severity:</b> OK (healthy) · INFO (opportunity) · WARN (attention) ·
+                    CRITICAL (act now).
+                  </p>
+                  <p className="mt-1">
+                    <b>Purpose tags:</b> cost (right-sizing) · health (stability) · query
+                    (workload/indexing) · rca (root cause) · risk (e.g. version EOL).
+                  </p>
+                  <p className="mt-1 text-muted-foreground">
+                    An LLM-refined assessment is planned; this deterministic pass is the
+                    starting point.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </CardTitle>
+          <p className="pt-1 text-xs text-muted-foreground">
+            A deterministic first pass — combinatorial signals turned into named findings and
+            recommendations. A starting point, not a final verdict.
+          </p>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm leading-relaxed text-foreground">{assessment.headline}</p>

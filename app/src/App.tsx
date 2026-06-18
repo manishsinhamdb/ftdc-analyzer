@@ -394,7 +394,8 @@ export default function App() {
         {/* Source bar — live file picker + analyze + bundled fallback */}
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-6 py-2.5">
           <Button size="sm" variant="outline" className="h-8 gap-2 text-xs" onClick={pickFolder}
-                  disabled={analyzing}>
+                  disabled={analyzing}
+                  title="Choose a diagnostic.data folder (or a parent of host folders) to analyze">
             <FolderOpen className="size-4" /> Open FTDC data…
           </Button>
           <span className="max-w-[34ch] truncate font-mono text-xs text-muted-foreground"
@@ -402,7 +403,8 @@ export default function App() {
             {selectedPath ?? "no folder selected"}
           </span>
           <Button size="sm" className="h-8 gap-2 text-xs" onClick={analyze}
-                  disabled={analyzing || !selectedPath}>
+                  disabled={analyzing || !selectedPath}
+                  title="Run the local engine on the selected folder (no upload)">
             {analyzing ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
             {analyzing ? "Analyzing…" : "Analyze"}
           </Button>
@@ -421,6 +423,7 @@ export default function App() {
                 variant="ghost"
                 className="h-8 text-xs"
                 disabled={analyzing}
+                title="Reveal the self-contained HTML report for this run in Finder"
                 onClick={() =>
                   revealItemInDir(`${dataDir}/report.html`).catch((e) =>
                     toast.error(`Export failed: ${String(e)}`),
