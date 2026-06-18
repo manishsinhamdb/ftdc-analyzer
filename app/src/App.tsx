@@ -52,6 +52,7 @@ import { InsightsStrip } from "@/components/InsightsStrip";
 import { SystemView } from "@/components/SystemView";
 import { ExploreView } from "@/components/ExploreView";
 import { AssessmentPanel } from "@/components/AssessmentPanel";
+import { Landing } from "@/components/Landing";
 
 import {
   type Check,
@@ -206,11 +207,12 @@ export default function App() {
   const [activeCat, setActiveCat] = useState<string>("");
   const [metricsFull, setMetricsFull] = useState<MetricsFull | null>(null);
   const [mfLoading, setMfLoading] = useState(false);
-  // Data source: null dir = bundled sample (public/), else a live engine-run dir.
+  // Data source: null dir = bundled demo (public/), else a live engine-run dir.
   const [dataDir, setDataDir] = useState<string | null>(null);
-  const [sourceLabel, setSourceLabel] = useState<string>("bundled sample");
+  const [sourceLabel, setSourceLabel] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [demoAvailable, setDemoAvailable] = useState(false);
 
   async function loadFrom(dir: string | null, label: string) {
     const file = dir === null ? "sample_results.json" : "results.json";
@@ -222,11 +224,19 @@ export default function App() {
     setError(null);
   }
 
-  // Load the bundled sample on first mount.
+  // Privacy-first: do NOT auto-load anything. Just probe whether a local demo
+  // sample exists so we can optionally offer it.
   useEffect(() => {
-    loadFrom(null, "bundled sample").catch((e) => setError(String(e)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    fetch("/sample_results.json", { method: "HEAD" })
+      .then((r) => setDemoAvailable(r.ok))
+      .catch(() => setDemoAvailable(false));
   }, []);
+
+  function loadDemo() {
+    loadFrom(null, "demo sample")
+      .then(() => setView("overview"))
+      .catch((e) => toast.error(`Demo unavailable: ${String(e)}`));
+  }
 
   // Lazy-load the full metric catalog the first time Explore opens; cache after.
   useEffect(() => {
@@ -290,6 +300,24 @@ export default function App() {
   }, [data, master]);
 
   const effectiveRange = range ?? fullRange;
+
+  // Privacy-first landing: nothing customer-identifying shows until a run loads.
+  if (!data) {
+    return (
+      <>
+        <Landing
+          selectedPath={selectedPath}
+          analyzing={analyzing}
+          demoAvailable={demoAvailable}
+          error={error}
+          onPick={pickFolder}
+          onAnalyze={analyze}
+          onLoadDemo={loadDemo}
+        />
+        <Toaster richColors position="bottom-right" theme="dark" />
+      </>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
@@ -372,11 +400,12 @@ export default function App() {
                 Export HTML
               </Button>
             )}
-            <Button size="sm" variant="ghost" className="h-8 text-xs"
-                    onClick={() => loadFrom(null, "bundled sample").then(() => setView("overview")).catch((e) => toast.error(String(e)))}
-                    disabled={analyzing}>
-              Load bundled sample
-            </Button>
+            {demoAvailable && (
+              <Button size="sm" variant="ghost" className="h-8 text-xs"
+                      onClick={loadDemo} disabled={analyzing}>
+                Load demo sample
+              </Button>
+            )}
           </div>
         </div>
         {/* Topbar */}
