@@ -149,26 +149,167 @@ export const SEVERITY_RANK: Record<SignatureSeverity, number> = {
   OK: 3,
 };
 
+/** Which data sources drove this run. A healthcheck-only run has ftdc=false → no
+ *  time-series (charts / signals / verdicts are absent). */
+export interface DataSources {
+  ftdc: boolean;
+  healthcheck: boolean;
+  profiler: boolean;
+}
+
 export interface FtdcResults {
   schema_version: number;
   generated_at: string;
   source: SourceInfo;
   host: HostInfo;
   capture: CaptureInfo;
+  /** Present from Phase-7 on; absent on older cached runs (treat absent as ftdc-only). */
+  data_sources?: DataSources;
   signals: Record<string, SignalStat>;
-  assessment: Assessment;
+  /** Null on a healthcheck-only run (the signature assessment needs FTDC signals). */
+  assessment: Assessment | null;
   /** Layer-2 deterministic scorer output (ranked categories + ledgers). Typed in lib/ruleset. */
   assessment_v2?: import("@/lib/ruleset").AssessmentV2;
   /** Sizing Recommendation (Atlas-tier options); present for sizing/cost intents. */
   sizing_recommendation?: import("@/lib/sizing").SizingRecommendation;
-  verdicts: Verdicts;
-  cost_optimization: CostOptimization;
+  /** Rich getMongoData-style facts; present when a healthcheck snapshot was provided. */
+  healthcheck?: HealthcheckReport | null;
+  verdicts: Verdicts | null;
+  cost_optimization: CostOptimization | null;
   insights: Insight[];
   chart_catalog: ChartCategory[];
-  facts: Facts;
+  facts: Facts | null;
   series: Record<string, SeriesData>;
   missing_paths: string[];
   skipped_files?: { file: string; reason: string }[];
+  notes: string[];
+}
+
+// ---- Healthcheck (getMongoData) report ----------------------------------
+
+export interface HcIndexRow {
+  db: string | null;
+  collection: string | null;
+  name: string;
+  key: Record<string, number>;
+  ops: number | null;
+  since: number | null;
+  size_bytes: number;
+  size_mb: number;
+  unused: boolean;
+  redundant_of: string | null;
+  unique: boolean;
+}
+
+export interface HcRedundantPair {
+  db: string | null;
+  collection: string | null;
+  redundant: string;
+  covered_by: string;
+  kind: string;
+  redundant_unused: boolean;
+  size_bytes: number;
+}
+
+export interface HcCollection {
+  db: string | null;
+  name: string | null;
+  type: string | null;
+  capped: boolean;
+  count: number;
+  avg_obj_size: number | null;
+  data_size: number;
+  storage_size: number;
+  total_index_size: number;
+  nindexes: number;
+  block_compressor: string | null;
+  compression_ratio: number | null;
+  index_to_data_pct: number | null;
+  indexes: HcIndexRow[];
+}
+
+export interface HealthcheckReport {
+  source_path: string;
+  server: {
+    version: string | null;
+    edition: string | null;
+    storage_engine: string | null;
+    num_cores: number | null;
+    mem_mb: number | null;
+    mem_gb: number | null;
+    uptime_sec: number | null;
+    uptime_days: number | null;
+    page_faults: number | null;
+    connections: { current: number | null; available: number | null; total_created: number | null };
+    wt_cache_gb: number | null;
+    bytes_in_cache_gb: number | null;
+    cache_fill_pct: number | null;
+    shell_version: string | null;
+    script_version: string | null;
+  };
+  topology: {
+    configuration: string | null;
+    members_total: number;
+    members: {
+      id: number | null; host: string | null; arbiter: boolean; priority: number | null;
+      votes: number | null; hidden: boolean; electable: boolean; secondary_delay_secs: number | null;
+    }[];
+    arbiters: number; data_bearing: number; electable: number; priority_zero: number; hidden: number;
+    repl_set_name: string | null; cluster_role: string | null; is_sharded: boolean;
+  };
+  replication: {
+    log_size_mb: number | null; used_mb: number | null; time_diff_hours: number | null;
+    used_pct: number | null;
+  };
+  storage: {
+    total_data_size: number | null; total_storage_size: number | null; total_index_size: number | null;
+    total_data_tb: number | null; total_storage_tb: number | null; total_index_gib: number | null;
+    compression_ratio: number | null; n_databases: number; n_collections: number; n_indexes: number;
+    block_compressors: Record<string, number>;
+  };
+  databases: {
+    db: string | null; collections: number; views: number; data_size: number | null;
+    storage_size: number | null; index_size: number | null; avg_obj_size: number | null;
+    indexes: number; collection_names: (string | null)[];
+  }[];
+  collections: HcCollection[];
+  index_analysis: {
+    total_indexes: number; secondary_indexes: number; unused_count: number; droppable_count: number;
+    unique_unused_count: number; reclaimable_bytes: number; reclaimable_gb: number;
+    redundant_pairs: HcRedundantPair[];
+    drop_list: { index: string; db: string | null; collection: string | null; name: string;
+      size_bytes: number; size_mb: number; ops: number | null; since: number | null;
+      key: Record<string, number> }[];
+    top_accessed: { index: string; ops: number | null; size_mb: number }[];
+    all_indexes: HcIndexRow[];
+  };
+  operations: {
+    opcounters: Record<string, number | null>;
+    opcounters_per_sec: Record<string, number | null>;
+    document: Record<string, number | null>;
+    document_per_sec: Record<string, number | null>;
+    ttl: Record<string, number | null>;
+    note: string;
+  };
+  wiredtiger: Record<string, {
+    label: string; buckets: { label: string; count: number }[]; total: number;
+    tail_count: number; tail_pct: number | null;
+  }>;
+  network: {
+    bytes_in_gb: number | null; bytes_out_gb: number | null; network_compression_active: boolean;
+    network_compressor: string | null; wire_compression_ratio: number | null;
+    egress_ingress_ratio: number | null; write_amplification: number | null;
+    storage_block_compressors: Record<string, number>;
+    compressor_bytes_in: number | null; compressor_bytes_out: number | null;
+  };
+  security: {
+    edition: string | null; is_community: boolean | null; version: string | null;
+    bind_ip: string | null; tls_mode: string | null; authorization: string | null;
+    cluster_auth_mode: string | null; launch_arguments: string[] | null;
+    feature_gaps: string[]; warnings: string[]; config_path: string | null;
+    db_path: string | null; journal_enabled: boolean | null;
+  };
+  errors: unknown[];
   notes: string[];
 }
 
@@ -295,6 +436,23 @@ export function fmtNum(x: number | null | undefined, digits = 3): string {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+/** Format a byte count in decimal units (disk-vendor convention: KB=1e3 … TB=1e12),
+ *  matching the engine's on-disk size reporting. */
+export function fmtBytes(b: number | null | undefined): string {
+  if (b === null || b === undefined || !Number.isFinite(b)) return "—";
+  if (b === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log10(Math.abs(b)) / 3));
+  const v = b / 1000 ** i;
+  return `${v.toLocaleString(undefined, { maximumFractionDigits: v >= 100 ? 0 : v >= 10 ? 1 : 2 })} ${units[i]}`;
+}
+
+/** Compact integer (e.g. 304,626,756 → "304.6M") for big op/doc counts. */
+export function fmtCompact(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
+  return n.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
 }
 
 export function fmtSpan(seconds: number): string {

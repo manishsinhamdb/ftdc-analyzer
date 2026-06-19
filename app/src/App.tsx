@@ -14,11 +14,13 @@ import {
   FolderOpen,
   Gauge,
   HardDrive,
+  ClipboardList,
   History,
   Home,
   Loader2,
   Lock,
   MemoryStick,
+  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
@@ -26,6 +28,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Sparkles,
+  Sun,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -70,6 +73,8 @@ import {
 import { Landing } from "@/components/Landing";
 import { LlmSettings } from "@/components/LlmSettings";
 import { MiniGame } from "@/components/MiniGame";
+import { HealthcheckReport } from "@/components/HealthcheckReport";
+import { applyTheme, nextTheme, type ThemeName } from "@/lib/theme";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -94,7 +99,27 @@ import {
   historyEntryLabels,
 } from "@/lib/ftdc";
 
-type View = "overview" | "inference" | "charts" | "signals" | "system" | "explore" | "methodology";
+type View =
+  | "overview"
+  | "inference"
+  | "charts"
+  | "signals"
+  | "system"
+  | "explore"
+  | "methodology"
+  | "healthcheck";
+
+// Whether a loaded run carries FTDC time-series and/or a healthcheck snapshot. Older
+// cached runs predate `data_sources` → infer FTDC from the capture sample count.
+function hasFtdc(d: FtdcResults): boolean {
+  return d.data_sources ? d.data_sources.ftdc : (d.capture?.samples ?? 0) > 0;
+}
+function hasHc(d: FtdcResults): boolean {
+  return d.data_sources ? d.data_sources.healthcheck : !!d.healthcheck;
+}
+function initialView(d: FtdcResults): View {
+  return hasFtdc(d) ? "overview" : "healthcheck";
+}
 
 const VERDICT_META: Record<
   string,
@@ -110,12 +135,14 @@ const NAV: {
   view: View;
   icon: ComponentType<{ className?: string }>;
   tip: string;
+  needs?: "ftdc" | "healthcheck";
 }[] = [
-  { label: "Overview", view: "overview", icon: Gauge, tip: "Unbiased results: verdicts, insight chips, headline charts" },
-  { label: "Charts", view: "charts", icon: Activity, tip: "All metric charts grouped by category" },
-  { label: "Signals", view: "signals", icon: Database, tip: "Searchable table of every derived signal" },
-  { label: "System", view: "system", icon: Server, tip: "Full host build, OS, and mongod config" },
-  { label: "Explore", view: "explore", icon: Compass, tip: "Browse and chart any of the 1300+ raw metrics" },
+  { label: "Overview", view: "overview", icon: Gauge, tip: "Unbiased results: verdicts, insight chips, headline charts", needs: "ftdc" },
+  { label: "Healthcheck", view: "healthcheck", icon: ClipboardList, tip: "getMongoData report: server, collections, indexes, ops, security", needs: "healthcheck" },
+  { label: "Charts", view: "charts", icon: Activity, tip: "All metric charts grouped by category", needs: "ftdc" },
+  { label: "Signals", view: "signals", icon: Database, tip: "Searchable table of every derived signal", needs: "ftdc" },
+  { label: "System", view: "system", icon: Server, tip: "Full host build, OS, and mongod config", needs: "ftdc" },
+  { label: "Explore", view: "explore", icon: Compass, tip: "Browse and chart any of the 1300+ raw metrics", needs: "ftdc" },
   { label: "Methodology", view: "methodology", icon: SlidersHorizontal, tip: "View & tune the scoring ruleset: categories, signals, conditioning" },
   { label: "Assessment", view: "inference", icon: Sparkles, tip: "Opt-in automated first-pass findings and recommendations" },
 ];
@@ -141,7 +168,7 @@ function spansTwoCols(ch: ChartSpec): boolean {
 
 // Build {signal: {p95?, p99?}} threshold map from the verdict checks so the Signals
 // table can flag percentile values that breach known thresholds.
-function buildThresholds(verdicts: FtdcResults["verdicts"]): Thresholds {
+function buildThresholds(verdicts: NonNullable<FtdcResults["verdicts"]>): Thresholds {
   const m: Thresholds = {};
   for (const key of ["ram", "cpu", "disk"] as const) {
     for (const chk of verdicts[key].checks) {
@@ -262,6 +289,18 @@ export default function App() {
   });
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
   const [llmOpen, setLlmOpen] = useState(false); // LLM Settings modal
+  // Theme (dark default / light "report"). main.tsx applies the persisted class before
+  // first paint; mirror it into state so the toggle re-renders.
+  const [theme, setThemeState] = useState<ThemeName>(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("light")
+      ? "light"
+      : "dark",
+  );
+  function toggleTheme() {
+    const n = nextTheme(theme);
+    applyTheme(n);
+    setThemeState(n);
+  }
   // Loading mini-game shown over a full (re-)analyze decode; results load underneath.
   const [gameOpen, setGameOpen] = useState(false);
   const [gameReady, setGameReady] = useState(false);
@@ -370,7 +409,7 @@ export default function App() {
 
   function loadHistoryEntry(entry: RunHistoryEntry) {
     loadFrom(entry.cache_dir, `${entry.hostname} (history)`)
-      .then(() => setView("overview"))
+      .then((d) => setView(initialView(d)))
       .catch((e) =>
         toast.error(`Could not load cached run (it may have been cleared): ${String(e)}`),
       );
@@ -437,13 +476,14 @@ export default function App() {
   }
 
   async function analyze() {
-    if (!selectedPath) {
-      toast.error("Pick a folder first.");
+    if (!selectedPath && !healthcheckPath) {
+      toast.error("Provide an FTDC folder or a healthcheck snapshot first.");
       return;
     }
+    const ftdcRun = !!selectedPath; // a healthcheck-only run skips the long FTDC decode
     setAnalyzing(true);
     setGameReady(false);
-    setGameOpen(true); // show the mini-game during the long decode
+    if (ftdcRun) setGameOpen(true); // mini-game only for the long FTDC decode
     try {
       const res = await invoke<{ dir: string; hostname: string }>("analyze_path", {
         path: selectedPath,
@@ -456,13 +496,13 @@ export default function App() {
       // The pre-flight configured an assessment intent + mode → opt in to the panel.
       setGenerateAssessment(true);
       const loaded = await loadFrom(res.dir, `${res.hostname} (live)`);
-      setView("overview");
+      setView(initialView(loaded));
       setGameReady(true); // results loaded underneath the game → show "ready" prompt
       toast.success(`Analyzed ${res.hostname}`);
       const entry: RunHistoryEntry = {
         hostname: res.hostname,
         timestamp: new Date().toISOString(),
-        source_path: selectedPath,
+        source_path: selectedPath ?? healthcheckPath ?? "(healthcheck)",
         cache_dir: res.dir,
         role: loaded.host.cluster_role ?? loaded.host.role ?? null,
         first_ts: loaded.capture.first_ts_iso,
@@ -516,7 +556,7 @@ export default function App() {
       setMetricsFull(null);
       setError(null);
       setGenerateAssessment(true);
-      setView("overview");
+      setView(initialView(d));
     } catch (e) {
       toast.error(`Could not open cached run (it may have been cleared): ${String(e)}`);
     }
@@ -609,6 +649,14 @@ export default function App() {
 
   const effectiveRange = range ?? fullRange;
 
+  const ftdcReady = data ? hasFtdc(data) : false;
+  const hcReady = data ? hasHc(data) : false;
+  const navItems = NAV.filter((n) => {
+    if (n.needs === "ftdc") return ftdcReady;
+    if (n.needs === "healthcheck") return hcReady;
+    return true;
+  });
+
   // Privacy-first landing: nothing customer-identifying shows until a run loads.
   if (!data) {
     return (
@@ -646,7 +694,7 @@ export default function App() {
         />
         <LlmSettings open={llmOpen} onOpenChange={setLlmOpen} />
         {gameOpen && <MiniGame ready={gameReady} onGoToResults={() => setGameOpen(false)} />}
-        <Toaster richColors position="bottom-right" theme="dark" />
+        <Toaster richColors position="bottom-right" theme={theme} />
       </>
     );
   }
@@ -680,7 +728,7 @@ export default function App() {
         </button>
         <Separator className="bg-sidebar-border" />
         <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
-          {NAV.map((n) => {
+          {navItems.map((n) => {
             const Icon = n.icon;
             const active = view === n.view;
             return (
@@ -814,7 +862,15 @@ export default function App() {
             <span className="text-xs text-muted-foreground">
               source: <span className="font-medium text-foreground">{sourceLabel}</span>
             </span>
-            {dataDir && (
+            <button
+              onClick={toggleTheme}
+              title={theme === "dark" ? "Switch to light report theme" : "Switch to dark theme"}
+              aria-label="Toggle theme"
+              className="flex size-8 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+            >
+              {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+            </button>
+            {dataDir && ftdcReady && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -833,19 +889,27 @@ export default function App() {
           {data ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
               <h1 className="text-xl font-bold">{data.host.hostname}</h1>
-              <Badge style={{ backgroundColor: "#5A6E82", color: "#E6EDF3" }}>{data.host.role}</Badge>
+              {data.host.role && (
+                <Badge style={{ backgroundColor: "#5A6E82", color: "#E6EDF3" }}>{data.host.role}</Badge>
+              )}
               <span className="text-sm text-muted-foreground">MongoDB {data.host.mongo_version}</span>
-              <span className="text-sm text-muted-foreground">
-                {data.capture.first_ts_iso?.replace("+00:00", "Z")} →{" "}
-                {data.capture.last_ts_iso?.replace("+00:00", "Z")}
-              </span>
-              <span className="text-sm text-muted-foreground">
-                · {fmtSpan(data.capture.span_seconds)} · {data.capture.samples.toLocaleString("en-US")} samples
-              </span>
+              {ftdcReady ? (
+                <>
+                  <span className="text-sm text-muted-foreground">
+                    {data.capture.first_ts_iso?.replace("+00:00", "Z")} →{" "}
+                    {data.capture.last_ts_iso?.replace("+00:00", "Z")}
+                  </span>
+                  <span className="text-sm text-muted-foreground">
+                    · {fmtSpan(data.capture.span_seconds)} · {data.capture.samples.toLocaleString("en-US")} samples
+                  </span>
+                </>
+              ) : (
+                <Badge variant="outline" className="text-xs">healthcheck snapshot · no time-series</Badge>
+              )}
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 <HwPill>{data.host.num_cores} cores</HwPill>
                 <HwPill>{((data.host.mem_mb ?? 0) / 1024).toFixed(1)} GB RAM</HwPill>
-                <HwPill>data disk: {data.host.data_disk}</HwPill>
+                {data.host.data_disk && <HwPill>data disk: {data.host.data_disk}</HwPill>}
               </div>
             </div>
           ) : (
@@ -874,11 +938,13 @@ export default function App() {
                   opt-in via the "Generate assessment" toggle. */}
               <InsightsStrip insights={data.insights} />
 
-              <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                <VerdictCard id="ram" v={data.verdicts.ram} />
-                <VerdictCard id="cpu" v={data.verdicts.cpu} />
-                <VerdictCard id="disk" v={data.verdicts.disk} />
-              </section>
+              {data.verdicts && (
+                <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <VerdictCard id="ram" v={data.verdicts.ram} />
+                  <VerdictCard id="cpu" v={data.verdicts.cpu} />
+                  <VerdictCard id="disk" v={data.verdicts.disk} />
+                </section>
+              )}
 
               <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 {OVERVIEW_CHART_TITLES.map((title) => {
@@ -963,10 +1029,14 @@ export default function App() {
             </Tabs>
           )}
 
+          {data && view === "healthcheck" && data.healthcheck && (
+            <HealthcheckReport hc={data.healthcheck} sizing={data.sizing_recommendation} />
+          )}
+
           {data && view === "methodology" && <MethodologyRules />}
 
           {data && view === "inference" && (
-            generateAssessment && data.assessment ? (
+            generateAssessment && (data.assessment_v2 || data.assessment) ? (
               <div className="space-y-4">
                 {data.assessment_v2 && (
                   <AssessmentV2Panel
@@ -978,10 +1048,12 @@ export default function App() {
                     sizing={data.sizing_recommendation}
                   />
                 )}
-                <AssessmentPanel
-                  assessment={data.assessment}
-                  costOptimization={data.cost_optimization}
-                />
+                {data.assessment && data.cost_optimization && (
+                  <AssessmentPanel
+                    assessment={data.assessment}
+                    costOptimization={data.cost_optimization}
+                  />
+                )}
               </div>
             ) : (
               <Card>
@@ -1007,11 +1079,11 @@ export default function App() {
               signals={data.signals}
               series={data.series}
               range={effectiveRange}
-              thresholds={buildThresholds(data.verdicts)}
+              thresholds={data.verdicts ? buildThresholds(data.verdicts) : {}}
             />
           )}
 
-          {data && view === "system" && <SystemView facts={data.facts} />}
+          {data && view === "system" && data.facts && <SystemView facts={data.facts} />}
 
           {data && view === "explore" && (
             <ExploreView
@@ -1027,7 +1099,7 @@ export default function App() {
       </div>
       <LlmSettings open={llmOpen} onOpenChange={setLlmOpen} />
       {gameOpen && <MiniGame ready={gameReady} onGoToResults={() => setGameOpen(false)} />}
-      <Toaster richColors position="bottom-right" theme="dark" />
+      <Toaster richColors position="bottom-right" theme={theme} />
     </div>
   );
 }

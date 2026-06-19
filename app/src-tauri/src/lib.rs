@@ -18,13 +18,19 @@ struct AnalyzeResult {
 #[tauri::command]
 async fn analyze_path(
     app: tauri::AppHandle,
-    path: String,
+    path: Option<String>,
     target_category: Option<String>,
     intent: Option<String>,
     healthcheck: Option<String>,
     profiler: Option<String>,
     cloud: Option<String>,
 ) -> Result<AnalyzeResult, String> {
+    // Co-primary inputs: either FTDC (`path`) or a healthcheck snapshot (or both) is enough.
+    let ftdc = path.clone().filter(|s| !s.is_empty());
+    let hc = healthcheck.clone().filter(|s| !s.is_empty());
+    if ftdc.is_none() && hc.is_none() {
+        return Err("provide at least an FTDC folder or a healthcheck snapshot".to_string());
+    }
     let cache = app
         .path()
         .app_cache_dir()
@@ -42,8 +48,14 @@ async fn analyze_path(
         .sidecar("ftdc-engine")
         .map_err(|e| format!("sidecar not found: {e}"))?;
     // Pass operator ruleset overrides to the Layer-2 scorer when present.
-    let mut args: Vec<String> =
-        vec![path.clone(), "--out-dir".to_string(), out_str.clone()];
+    // FTDC path is the positional arg; a healthcheck-only run omits it (the engine
+    // detects healthcheck-only mode from --healthcheck with no positional input).
+    let mut args: Vec<String> = Vec::new();
+    if let Some(p) = &ftdc {
+        args.push(p.clone());
+    }
+    args.push("--out-dir".to_string());
+    args.push(out_str.clone());
     if let Some(ov) = ruleset::existing_overrides_path(&app) {
         args.push("--ruleset-overrides".to_string());
         args.push(ov);

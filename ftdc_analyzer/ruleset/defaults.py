@@ -39,6 +39,16 @@ _WORKLOAD_FLIP = (
     "sizing after the workload is corrected."
 )
 
+# Conditional recommendation when a healthcheck-derived schema / index anti-pattern fires —
+# the structural finding helps answer the capacity question "is this hardware, or the data
+# model?" Resolves the capacity card's "provide healthcheck to disambiguate" caveat.
+_SCHEMA_FLIP = (
+    "Resource stress co-occurs with a flagged schema / index-bloat anti-pattern (see the "
+    "Structural-Design findings — large documents, over-indexing, or unused-index bloat). "
+    "These inflate the working set and write amplification; address the data model / index "
+    "hygiene first, then reassess sizing."
+)
+
 
 def _S(path, weight, direction="+", comparator=">", threshold=0.0, stat="p95",
        interpretation="", disambiguator=None, status="active", unit=""):
@@ -93,7 +103,8 @@ def _memory_cache_pressure() -> Category:
             "Cache-pressure indicators are elevated. Consider increasing RAM / WiredTiger "
             "cache size — but first rule out inefficient queries inflating the working set."),
         conditioned_by=["query_targeting_index_recs", "schema_datamodel"],
-        conditional_recommendations={"query_targeting_index_recs": _WORKLOAD_FLIP},
+        conditional_recommendations={"query_targeting_index_recs": _WORKLOAD_FLIP,
+                                     "schema_datamodel": _SCHEMA_FLIP},
         fire_threshold=0.5,
     )
 
@@ -135,7 +146,8 @@ def _cpu_compute_sizing() -> Category:
             "CPU appears compute-bound at peak. Consider more vCPUs — after confirming the "
             "load isn't inflated by inefficient queries."),
         conditioned_by=["query_targeting_index_recs", "schema_datamodel"],
-        conditional_recommendations={"query_targeting_index_recs": _WORKLOAD_FLIP},
+        conditional_recommendations={"query_targeting_index_recs": _WORKLOAD_FLIP,
+                                     "schema_datamodel": _SCHEMA_FLIP},
         fire_threshold=0.5,
     )
 
@@ -176,7 +188,8 @@ def _disk_io_saturation() -> Category:
             "Disk I/O is saturated. Consider faster / provisioned-IOPS storage — but first "
             "confirm the load isn't driven by inefficient queries (scans inflate I/O)."),
         conditioned_by=["query_targeting_index_recs", "schema_datamodel"],
-        conditional_recommendations={"query_targeting_index_recs": _WORKLOAD_FLIP},
+        conditional_recommendations={"query_targeting_index_recs": _WORKLOAD_FLIP,
+                                     "schema_datamodel": _SCHEMA_FLIP},
         fire_threshold=0.5,
     )
 
@@ -267,7 +280,124 @@ def _write_path_contention() -> Category:
 
 
 # ---------------------------------------------------------------------------
-# STUB categories (11) — declared + wired, not yet deep
+# DEEP structural categories (healthcheck-scored) — signals read the healthcheck-
+# derived stats injected into sig_stats by ftdc_analyzer.healthcheck (keys prefixed
+# `hc_`). required_inputs=["healthcheck"] so they score on a healthcheck-only run too.
+# The concrete drop list / reclaimable bytes / anti-pattern evidence + a generated
+# recommendation are merged into the scored result post-scoring (verdicts.py).
+# ---------------------------------------------------------------------------
+def _index_health_bloat() -> Category:
+    return Category(
+        id="index_health_bloat",
+        name="Index Health & Bloat",
+        family="Structural-Design",
+        description=(
+            "Unused and prefix/shadow-redundant indexes, index bloat and the write "
+            "amplification of over-indexing — from the healthcheck collection/index stats "
+            "($indexStats usage counts + per-index sizes)."),
+        required_inputs=["healthcheck"],
+        signals=[
+            _S("hc_unused_index_count", 0.40, "+", ">", 0, "p95", unit="indexes",
+               interpretation="Unused secondary indexes present (zero $indexStats ops since "
+                              "the stats window opened) — pure write/storage overhead.",
+               disambiguator=_D("hc_uptime_days", ">", 7, "enable",
+                                note="Index usage counts are cumulative since the last restart "
+                                     "/ stats reset. Only treat 'unused' as actionable when the "
+                                     "uptime window is long enough (>7d) to be representative; "
+                                     "on a freshly-restarted node, unused≠safe-to-drop.")),
+            _S("hc_reclaimable_gb", 0.30, "+", ">", 0.5, "p95", unit="GB",
+               interpretation="Droppable unused-index storage is non-trivial (>0.5 GB "
+                              "reclaimable on disk + in cache + in backups)."),
+            _S("hc_prefix_redundant_pairs", 0.30, "+", ">", 0, "p95", unit="pairs",
+               interpretation="Prefix/shadow-redundant index pairs exist (a single-field index "
+                              "covered by a compound, or an accidental `x_1` / `x_1_1` duplicate)."),
+        ],
+        caveats=[
+            "Index access counts are cumulative since the last server restart / stats reset — "
+            "confirm the uptime window is representative before acting.",
+            "Confirm zero usage across ALL replica-set members (an index may serve reads on a "
+            "member not captured in this snapshot) before dropping.",
+            "Unique indexes are RETAINED even when unused — they enforce a data constraint, not "
+            "just query acceleration; they are excluded from the drop list.",
+        ],
+        recommendation=(
+            "Review unused and redundant indexes for removal to cut write amplification and "
+            "reclaim storage. (A concrete drop list with reclaimable GB is attached when a "
+            "healthcheck is loaded.)"),
+        fire_threshold=0.5,
+    )
+
+
+def _schema_datamodel() -> Category:
+    return Category(
+        id="schema_datamodel",
+        name="Schema & Data Model",
+        family="Structural-Design",
+        description=(
+            "Data-model anti-patterns — large average documents, over-indexed collections, and "
+            "anomalous index:data ratios — that drive resource stress, from the healthcheck "
+            "collection stats."),
+        required_inputs=["healthcheck"],
+        signals=[
+            _S("hc_max_avg_obj_kb", 0.40, "+", ">", 10, "p95", unit="KB",
+               interpretation="A collection's average document is large (>10 KB) — review "
+                              "embedding depth / unbounded array growth."),
+            _S("hc_max_indexes_per_collection", 0.35, "+", ">", 12, "p95", unit="indexes",
+               interpretation="A collection carries many indexes (>12) — each adds write "
+                              "amplification; confirm all earn their keep."),
+            _S("hc_max_index_to_data_pct", 0.25, "+", ">", 50, "p95", unit="%",
+               interpretation="A sizeable collection's indexes exceed 50% of its data size — "
+                              "an index-heavy / over-indexed shape."),
+        ],
+        caveats=[
+            "Schema findings are structural heuristics from collection stats; a large embedded "
+            "document can be correct by design — confirm against the application access pattern.",
+            "Index:data ratios are only evaluated on collections with meaningful data volume "
+            "(tiny collections where _id dwarfs the data are excluded).",
+        ],
+        recommendation=(
+            "Review flagged collections for data-model anti-patterns (large documents, "
+            "over-indexing). (Specific collections are attached when a healthcheck is loaded.)"),
+        fire_threshold=0.5,
+    )
+
+
+def _storage_capacity_design() -> Category:
+    return Category(
+        id="storage_capacity_design",
+        name="Storage Capacity Design",
+        family="Structural-Design",
+        description=(
+            "Working-set-vs-cache fit, logical-vs-on-disk sizing and compression headroom — "
+            "from the healthcheck storage totals (feeds the sizing engine the real storage "
+            "number)."),
+        required_inputs=["healthcheck"],
+        signals=[
+            _S("hc_data_to_cache_ratio", 0.50, "+", ">", 5, "p95", unit="x",
+               interpretation="Logical data is many times the WiredTiger cache — the working "
+                              "set cannot be RAM-resident; reads are disk-served."),
+            _S("hc_storage_to_ram_ratio", 0.30, "+", ">", 15, "p95", unit="x",
+               interpretation="On-disk size dwarfs host RAM — a large-storage / cold-data "
+                              "profile where storage latency, not RAM, governs."),
+            _S("hc_compression_ratio", 0.20, "+", "<", 2.0, "p95", unit="x",
+               interpretation="Storage compression is modest (<2×, snappy) — zstd could reclaim "
+                              "more on-disk space if CPU headroom allows."),
+        ],
+        caveats=[
+            "Logical data size is an upper bound on the working set; the hot subset may be far "
+            "smaller. Pair with FTDC cache-eviction signals to confirm true memory pressure.",
+            "Storage sizing here is descriptive; the Sizing Recommendation panel turns it into "
+            "tier guidance.",
+        ],
+        recommendation=(
+            "Storage sizing and cache-fit are characterized from the healthcheck totals; see "
+            "the Sizing Recommendation for tier guidance using the real on-disk size."),
+        fire_threshold=0.5,
+    )
+
+
+# ---------------------------------------------------------------------------
+# STUB categories (8) — declared + wired, not yet deep
 # ---------------------------------------------------------------------------
 def _stub(cid, name, family, description, required_inputs, caveats,
           recommendation, signals=None, conditioned_by=None,
@@ -334,25 +464,10 @@ def _stub_categories():
                   _S("stale_config_errors_ps", 1.0, "+", ">", 0, "p95", status="stub",
                      interpretation="Stale-config errors (routing/metadata churn)."),
               ]),
-        # Structural-Design (require healthcheck)
-        _stub("index_health_bloat", "Index Health & Bloat", "Structural-Design",
-              "Unused/redundant indexes, index bloat and write-amplification from over-"
-              "indexing — needs collection/index stats from a healthcheck snapshot.",
-              ["ftdc", "healthcheck"],
-              ["Requires the healthcheck snapshot (getMongoData.js) — not derivable from FTDC."],
-              "Upload the healthcheck snapshot to populate index usage and bloat analysis."),
-        _stub("schema_datamodel", "Schema & Data Model", "Structural-Design",
-              "Data-model anti-patterns (unbounded arrays, large documents, hot collections) "
-              "that drive resource stress — needs healthcheck collection stats.",
-              ["ftdc", "healthcheck"],
-              ["Requires healthcheck collection/schema stats — not derivable from FTDC."],
-              "Upload the healthcheck snapshot to populate schema / data-model analysis."),
-        _stub("storage_capacity_design", "Storage Capacity Design", "Structural-Design",
-              "Working-set-vs-cache fit, on-disk sizing and fragmentation — needs collection "
-              "size/storage stats from a healthcheck snapshot.",
-              ["ftdc", "healthcheck"],
-              ["Requires healthcheck storage stats — FTDC has no per-collection sizing."],
-              "Upload the healthcheck snapshot to populate storage-capacity design analysis."),
+        # Structural-Design categories (index_health_bloat / schema_datamodel /
+        # storage_capacity_design) are now DEEP and healthcheck-scored — see the
+        # `_index_health_bloat()` / `_schema_datamodel()` / `_storage_capacity_design()`
+        # builders below; they are added in build_default_ruleset().
         # Query-Optimization (require profiler)
         _stub("query_targeting_index_recs", "Query Targeting & Index Recs", "Query-Optimization",
               "Query targeting (scanned-vs-returned), COLLSCAN identification and index "
@@ -493,6 +608,9 @@ def build_default_ruleset() -> Ruleset:
         _disk_io_saturation(),
         _replication_lag_cascade(),
         _write_path_contention(),
+        _index_health_bloat(),
+        _schema_datamodel(),
+        _storage_capacity_design(),
     ]
     categories.extend(_stub_categories())
     return Ruleset(version=RULESET_VERSION, categories=categories,

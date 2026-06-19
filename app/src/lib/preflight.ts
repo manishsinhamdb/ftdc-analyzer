@@ -31,18 +31,28 @@ export interface RunPlan {
 
 // Decide what "Run" will do, given the restored baseline (if any) and current selections.
 export function classifyRun(baseline: Baseline | null, cur: Selections): RunPlan {
+  const hasFtdc = !!cur.ftdc;
   if (!baseline) {
     return {
       action: "reanalyze",
       label: "Run analysis",
-      explain: "Decodes the FTDC capture and scores it.",
+      explain: hasFtdc
+        ? "Decodes the FTDC capture and scores it."
+        : "Parses the healthcheck snapshot and scores the structural categories.",
     };
   }
-  if (cur.ftdc !== baseline.ftdc) {
+  // Any change to the actual input files → a full re-run of the engine.
+  if (
+    cur.ftdc !== baseline.ftdc ||
+    cur.healthcheck !== baseline.healthcheck ||
+    cur.profiler !== baseline.profiler
+  ) {
     return {
       action: "reanalyze",
       label: "Re-analyze",
-      explain: "Input changed — will re-decode the FTDC capture.",
+      explain: hasFtdc
+        ? "Inputs changed — will re-run the engine (re-decode the FTDC capture)."
+        : "Inputs changed — will re-parse the healthcheck snapshot.",
     };
   }
   const changed: string[] = [];
@@ -53,8 +63,8 @@ export function classifyRun(baseline: Baseline | null, cur: Selections): RunPlan
   if (changed.length) {
     return {
       action: "rerun",
-      label: "Re-run (uses cached decode)",
-      explain: `${changed.join(" & ")} changed — will re-score from the cached decode (no re-decode).`,
+      label: hasFtdc ? "Re-run (uses cached decode)" : "Re-run (cached)",
+      explain: `${changed.join(" & ")} changed — will re-score from the cached result (no re-parse).`,
     };
   }
   return {

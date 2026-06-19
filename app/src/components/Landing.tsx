@@ -63,7 +63,7 @@ const STEPS = ["Inputs", "Intent", "Mode", "Review"] as const;
 function InputSlot({
   icon,
   title,
-  required,
+  badge,
   path,
   unlocks,
   onPick,
@@ -72,7 +72,7 @@ function InputSlot({
 }: {
   icon: React.ReactNode;
   title: string;
-  required?: boolean;
+  badge?: "primary" | "optional";
   path: string | null;
   unlocks?: string;
   onPick: () => void;
@@ -86,8 +86,15 @@ function InputSlot({
       <div className="flex items-center gap-2">
         <span className={present ? "text-primary" : "text-muted-foreground"}>{icon}</span>
         <span className="text-sm font-medium">{title}</span>
-        <span className="rounded bg-secondary/60 px-1.5 text-[9px] uppercase text-muted-foreground">
-          {required ? "required" : "optional"}
+        <span
+          className={
+            "rounded px-1.5 text-[9px] uppercase " +
+            (badge === "primary"
+              ? "bg-primary/15 text-primary"
+              : "bg-secondary/60 text-muted-foreground")
+          }
+        >
+          {badge === "primary" ? "primary" : "optional"}
         </span>
         {present && <Check className="ml-auto size-4 text-primary" />}
       </div>
@@ -227,11 +234,16 @@ export function Landing(props: Props) {
       .catch(() => {});
   }, []);
 
-  const provided = new Set<string>(["ftdc"]);
+  // Inputs actually provided drive the intent lock-flags (an intent needing FTDC shows
+  // "needs FTDC" on a healthcheck-only run, and vice-versa).
+  const provided = new Set<string>();
+  if (selectedPath) provided.add("ftdc");
   if (healthcheckPath) provided.add("healthcheck");
   if (profilerPath) provided.add("profiler");
 
-  const canNext = step === 1 ? !!selectedPath : step === 2 ? !!intent : true;
+  // Co-primary: at least one of FTDC or healthcheck enables the run.
+  const hasAnyInput = !!selectedPath || !!healthcheckPath;
+  const canNext = step === 1 ? hasAnyInput : step === 2 ? !!intent : true;
   const plan = classifyRun(phase === "wizard" && baseline ? baseline : null, {
     ftdc: selectedPath,
     intent: intent ?? "full_sweep",
@@ -415,13 +427,21 @@ export function Landing(props: Props) {
               {/* Step 1 — Inputs */}
               {step === 1 && (
                 <section className="space-y-2">
-                  <h2 className="text-sm font-semibold">Step 1 · Inputs <span className="font-normal text-muted-foreground">— provide more to unlock more</span></h2>
-                  <InputSlot icon={<Database className="size-4" />} title="FTDC diagnostic.data" required path={selectedPath} onPick={onPick} />
+                  <h2 className="text-sm font-semibold">Step 1 · Inputs <span className="font-normal text-muted-foreground">— provide at least one primary input (FTDC or healthcheck)</span></h2>
+                  <InputSlot
+                    icon={<Database className="size-4" />}
+                    title="FTDC diagnostic.data"
+                    badge="primary"
+                    path={selectedPath}
+                    unlocks="Time-series: capacity / incident analysis, charts, signals."
+                    onPick={onPick}
+                  />
                   <InputSlot
                     icon={<FileText className="size-4" />}
-                    title="Healthcheck snapshot"
+                    title="Healthcheck snapshot (getMongoData)"
+                    badge="primary"
                     path={healthcheckPath}
-                    unlocks="Unlocks index, schema & storage-design recommendations."
+                    unlocks="Structural: index health, schema & storage design, real sizing storage + the Healthcheck Report."
                     onPick={onPickHealthcheck}
                     onClear={onClearHealthcheck}
                     help={<HealthcheckHelp />}
@@ -429,12 +449,19 @@ export function Landing(props: Props) {
                   <InputSlot
                     icon={<FileText className="size-4" />}
                     title="Query profiler / slow-query log"
+                    badge="optional"
                     path={profilerPath}
                     unlocks="Unlocks query-targeting, index recommendations & slow-query hotspots."
                     onPick={onPickProfiler}
                     onClear={onClearProfiler}
                     help={<ProfilerHelp />}
                   />
+                  {!selectedPath && healthcheckPath && (
+                    <p className="rounded-md border border-border bg-secondary/20 px-3 py-2 text-[11px] text-muted-foreground">
+                      Healthcheck-only run: structural scoring, sizing and the Healthcheck Report
+                      will be produced. Time-series charts / signals need an FTDC capture.
+                    </p>
+                  )}
                 </section>
               )}
 
@@ -512,7 +539,12 @@ export function Landing(props: Props) {
                 <section className="space-y-3">
                   <h2 className="text-sm font-semibold">Step 4 · Review</h2>
                   <div className="space-y-2">
-                    <SummaryRow label="FTDC diagnostic.data" value={selectedPath ?? "— none —"} onEdit={() => setStep(1)} />
+                    <SummaryRow
+                      label="FTDC diagnostic.data"
+                      value={selectedPath ?? "— none (healthcheck-only) —"}
+                      muted={!selectedPath}
+                      onEdit={() => setStep(1)}
+                    />
                     {healthcheckPath && <SummaryRow label="Healthcheck snapshot" value={healthcheckPath} muted onEdit={() => setStep(1)} />}
                     {profilerPath && <SummaryRow label="Profiler / slow-query log" value={profilerPath} muted onEdit={() => setStep(1)} />}
                     <SummaryRow
@@ -543,7 +575,7 @@ export function Landing(props: Props) {
                   <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-[11px] text-muted-foreground">
                     {plan.explain}
                   </div>
-                  <Button className="w-full gap-2" disabled={analyzing || !selectedPath} onClick={() => onRun(baseline)}>
+                  <Button className="w-full gap-2" disabled={analyzing || !hasAnyInput} onClick={() => onRun(baseline)}>
                     {analyzing ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
                     {analyzing ? "Working…" : plan.label}
                   </Button>

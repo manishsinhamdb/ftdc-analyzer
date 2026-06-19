@@ -130,10 +130,26 @@ def main(argv=None):
         tables = sizing.load_tier_tables(load_overrides(ov_path))
         host = res.get("host", {}) or {}
         a2 = res.get("assessment_v2", {}) or {}
+        # Reconstruct the healthcheck sizing facts from the cached report (if present) so a
+        # cached-decode resize keeps the real storage size + cache-fit.
+        hc_report = res.get("healthcheck")
+        hc_sizing = None
+        if hc_report:
+            sv = hc_report.get("server", {}) or {}
+            stg = hc_report.get("storage", {}) or {}
+            hc_sizing = {
+                "storage_bytes_on_disk": stg.get("total_storage_size"),
+                "storage_bytes_logical": stg.get("total_data_size"),
+                "total_index_bytes": stg.get("total_index_size"),
+                "wt_cache_bytes": sv.get("wt_cache_bytes"),
+                "bytes_in_cache": sv.get("bytes_in_cache"),
+                "compression_ratio": stg.get("compression_ratio"),
+                "n_collections": stg.get("n_collections"),
+            }
         out = sizing.build_sizing_recommendation(
             host.get("num_cores"), host.get("mem_mb"), res.get("signals", {}) or {},
             a2.get("ranked", []), args.cloud, tables,
-            set(a2.get("provided_inputs", [])), args.intent)
+            set(a2.get("provided_inputs", [])), args.intent, healthcheck=hc_sizing)
         sys.stdout.write(json.dumps(out))
         sys.stdout.write("\n")
         return 0
@@ -149,6 +165,56 @@ def main(argv=None):
         dump["tier_tables"] = sizing.load_tier_tables(load_overrides(ov_path))
         sys.stdout.write(json.dumps(dump, indent=2))
         sys.stdout.write("\n")
+        return 0
+
+    # ---- HEALTHCHECK-ONLY MODE (co-primary input; no FTDC capture) ----
+    # A healthcheck snapshot drives the analysis on its own when no FTDC path is given.
+    if args.healthcheck and not args.input_path:
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        rl = RunLog(stamp)
+        rl.add(f"start: {datetime.datetime.now(datetime.timezone.utc).isoformat()}")
+        rl.add(f"healthcheck-only mode: {args.healthcheck}")
+        hc_path = os.path.abspath(os.path.expanduser(args.healthcheck))
+        if not os.path.exists(hc_path):
+            rl.add(f"FAILED: healthcheck file does not exist: {hc_path}")
+            rl.write()
+            print(f"error: healthcheck file does not exist: {hc_path}", file=sys.stderr)
+            return 2
+        try:
+            results = verdicts.build_results_healthcheck_only(
+                hc_path, target_category=args.target_category,
+                ruleset_overrides_path=args.ruleset_overrides, intent=args.intent,
+                provided_profiler=args.profiler, cloud=args.cloud)
+        except Exception as e:  # noqa: BLE001
+            rl.add(f"FAILED: {type(e).__name__}: {e}")
+            rl.write()
+            print(f"error: {type(e).__name__}: {e}", file=sys.stderr)
+            return 1
+        resolved_host = results.get("host", {}).get("hostname") or "healthcheck"
+        if args.out_dir:
+            out_dir = os.path.abspath(os.path.expanduser(args.out_dir))
+            os.makedirs(out_dir, exist_ok=True)
+            with open(os.path.join(out_dir, "results.json"), "w") as fh:
+                json.dump(results, fh, indent=2)
+            # Empty catalog so the app's Explore lazy-load never 404s on a HC-only run.
+            with open(os.path.join(out_dir, "metrics_full.json"), "w") as fh:
+                json.dump({"schema": "metrics_full/v1", "host": {"hostname": resolved_host,
+                          "version": results.get("host", {}).get("mongo_version")},
+                          "n_points": 0, "timeline": {"t": []}, "metrics": []}, fh)
+            rl.add(f"wrote {os.path.join(out_dir, 'results.json')}")
+            print(f"hostname={resolved_host}")
+            print(f"out_dir={out_dir}")
+        elif args.stdout:
+            sys.stdout.write(json.dumps(results, indent=2))
+            sys.stdout.write("\n")
+        else:
+            out_path = args.out or os.path.join(os.path.dirname(hc_path), "ftdc_results.json")
+            out_path = os.path.abspath(os.path.expanduser(out_path))
+            with open(out_path, "w") as fh:
+                json.dump(results, fh, indent=2)
+            print(f"[ftdc-engine] results: {out_path}", file=sys.stderr)
+        rl.add("OK")
+        rl.write()
         return 0
 
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")

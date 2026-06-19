@@ -85,6 +85,57 @@
   --sidebar-accent-foreground: #e6edf3;
   --sidebar-border: #1e3450;
   --sidebar-ring: #00ed64;
+
+  --scrollbar-thumb: #46607f;
+}
+
+/* Light "report" theme — fresh, calm, white cards on a light ground; colour reserved for
+   meaning (amber=warn, red=risk, green=good). Toggled via the `.light` class on <html>;
+   dark stays the default. */
+.light {
+  --background: #f5f8fb;
+  --foreground: #16242f;
+
+  --card: #ffffff;
+  --card-foreground: #16242f;
+  --popover: #ffffff;
+  --popover-foreground: #16242f;
+
+  --primary: #00824e;
+  --primary-foreground: #ffffff;
+
+  --secondary: #eef2f6;
+  --secondary-foreground: #16242f;
+
+  --muted: #eef2f6;
+  --muted-foreground: #5b6b7a;
+
+  --accent: #e4ebf2;
+  --accent-foreground: #16242f;
+
+  --destructive: #c2381f;
+  --destructive-foreground: #ffffff;
+
+  --border: #dde5ec;
+  --input: #dde5ec;
+  --ring: #00824e;
+
+  --chart-1: #009d5a;
+  --chart-2: #2b7fd4;
+  --chart-3: #cc8b00;
+  --chart-4: #d6533f;
+  --chart-5: #7c5cda;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #16242f;
+  --sidebar-primary: #00824e;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef2f6;
+  --sidebar-accent-foreground: #16242f;
+  --sidebar-border: #dde5ec;
+  --sidebar-ring: #00824e;
+
+  --scrollbar-thumb: #c2cdd9;
 }
 
 @theme inline {
@@ -148,7 +199,7 @@
    Contrasting thumb + green accent on hover; adequate width; webkit + standard. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #46607f transparent;
+  scrollbar-color: var(--scrollbar-thumb, #46607f) transparent;
 }
 *::-webkit-scrollbar {
   width: 12px;
@@ -158,7 +209,7 @@
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background-color: #46607f;
+  background-color: var(--scrollbar-thumb, #46607f);
   border-radius: 8px;
   border: 3px solid var(--background); /* inset padding so the thumb reads as a pill */
 }

@@ -138,9 +138,83 @@ def _tier_view(t, *, vcpu=None, provisioned=False, name=None):
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
+def _decimal_gb(b):
+    return round(b / 1_000_000_000, 1) if b else None
+
+
+def _storage_and_cache_fit(healthcheck, tiers, ram_gb):
+    """From the healthcheck storage totals, derive (a) the real on-disk size, (b) a
+    working-set-vs-cache read, and (c) the smallest tier whose disk:RAM ratio can hold the
+    on-disk data. Returns (storage_gb, cache_fit, storage_sizing, storage_note)."""
+    on_disk = healthcheck.get("storage_bytes_on_disk")
+    logical = healthcheck.get("storage_bytes_logical")
+    wt_cache = healthcheck.get("wt_cache_bytes")
+    in_cache = healthcheck.get("bytes_in_cache")
+    comp = healthcheck.get("compression_ratio")
+    on_disk_gb = _decimal_gb(on_disk)
+    logical_gb = _decimal_gb(logical)
+
+    # Cache-fit: can the (logical-data upper-bound) working set live in the WT cache?
+    wt_cache_gib = round(wt_cache / (1024 ** 3), 2) if wt_cache else None
+    in_cache_gib = round(in_cache / (1024 ** 3), 2) if in_cache else None
+    fits = bool(logical and wt_cache and logical <= wt_cache)
+    data_to_cache = round(logical / wt_cache, 1) if (logical and wt_cache) else None
+    cache_fit = {
+        "wt_cache_gib": wt_cache_gib,
+        "bytes_in_cache_gib": in_cache_gib,
+        "cache_fill_pct": round(100 * in_cache / wt_cache, 1) if (in_cache and wt_cache) else None,
+        "logical_data_gb": logical_gb,
+        "on_disk_gb": on_disk_gb,
+        "compression_ratio": round(comp, 2) if comp else None,
+        "working_set_fits_in_cache": fits,
+        "data_to_cache_ratio": data_to_cache,
+        "note": (
+            f"Logical data ≈ {logical_gb} GB is ~{data_to_cache}× the WiredTiger cache "
+            f"({wt_cache_gib} GiB) — the working set is NOT RAM-resident; reads are disk-served, "
+            f"so storage latency/IOPS governs."
+            if (data_to_cache and data_to_cache > 1.5) else
+            f"Logical data ≈ {logical_gb} GB fits within the WiredTiger cache "
+            f"({wt_cache_gib} GiB) — the working set can be largely RAM-resident."),
+    }
+
+    # Storage tier by disk:RAM ratio — smallest tier whose ram_gb × disk_ram_ratio covers
+    # the on-disk size (with 30% growth headroom).
+    storage_sizing = None
+    if on_disk_gb:
+        need = on_disk_gb * 1.3
+        covering = [t for t in tiers
+                    if t.get("disk_ram_ratio") and t["ram_gb"] * t["disk_ram_ratio"] >= need]
+        covering.sort(key=lambda t: (t["ram_gb"], t["vcpu"]))
+        min_tier = covering[0] if covering else None
+        storage_sizing = {
+            "on_disk_gb": on_disk_gb,
+            "recommended_with_growth_gb": round(need),
+            "min_tier_for_storage": min_tier["name"] if min_tier else None,
+            "min_tier_max_disk_gb": round(min_tier["ram_gb"] * min_tier["disk_ram_ratio"])
+            if min_tier else None,
+            "note": (
+                f"On-disk {on_disk_gb} GB (+30% headroom ⇒ {round(need)} GB) fits "
+                f"{min_tier['name']} (max {round(min_tier['ram_gb'] * min_tier['disk_ram_ratio'])} GB "
+                f"at {min_tier['disk_ram_ratio']}:1 disk:RAM)."
+                if min_tier else
+                f"On-disk {on_disk_gb} GB exceeds the largest tier's disk:RAM capacity — "
+                f"consider sharding or provisioned storage."),
+        }
+
+    storage_note = (
+        f"On-disk {on_disk_gb} GB across {healthcheck.get('n_collections')} collection(s); "
+        f"logical {logical_gb} GB at {round(comp, 2) if comp else '—'}× compression "
+        f"(from the healthcheck snapshot).")
+    return on_disk_gb, cache_fit, storage_sizing, storage_note
+
+
 def build_sizing_recommendation(num_cores, mem_mb, sig_stats, ranked, cloud,
-                                tables, provided_inputs, intent):
-    """Returns the sizing_recommendation dict (or one carrying an explicit data gap)."""
+                                tables, provided_inputs, intent, healthcheck=None):
+    """Returns the sizing_recommendation dict (or one carrying an explicit data gap).
+
+    When `healthcheck` (the parsed sizing facts) is present, the storage size and a
+    working-set-vs-cache fit are filled from the real on-disk numbers instead of the
+    "insufficient data — provide healthcheck" placeholder."""
     cloud = cloud if cloud in tables else "aws"
     table = tables.get(cloud) or tables.get("aws")
     provided = set(provided_inputs or [])
@@ -275,10 +349,15 @@ def build_sizing_recommendation(num_cores, mem_mb, sig_stats, ranked, cloud,
             reason += (f" (Disk is saturated but provisioned IOPS is AWS-only; on {cloud} "
                        "consider AWS or a higher tier.)")
 
-    # --- Honest data gaps + workload-efficiency conditioning ---
+    # --- Storage size + cache-fit (filled from the healthcheck when present) ---
     caveats = []
-    storage_note = None
-    if "healthcheck" in provided:
+    storage_gb = None
+    cache_fit = None
+    storage_sizing = None
+    if healthcheck:
+        storage_gb, cache_fit, storage_sizing, storage_note = _storage_and_cache_fit(
+            healthcheck, tiers, ram_gb)
+    elif "healthcheck" in provided:
         storage_note = "input provided — storage capacity sizing in a later update (parser pending)."
     else:
         storage_note = ("insufficient data — provide the healthcheck snapshot (getMongoData.js) "
@@ -313,9 +392,11 @@ def build_sizing_recommendation(num_cores, mem_mb, sig_stats, ranked, cloud,
             "disk_profile": disk_profile,
             "disk_saturated": disk_saturated,
             "observed_iops": observed_iops,
-            "storage_gb": None,
+            "storage_gb": storage_gb,
             "storage_note": storage_note,
         },
+        "cache_fit": cache_fit,
+        "storage_sizing": storage_sizing,
         "options": options,
         "recommended": recommended,
         "recommended_confidence": round(rec_conf, 2),

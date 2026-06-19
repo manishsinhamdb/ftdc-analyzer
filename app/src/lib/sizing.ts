@@ -63,6 +63,25 @@ export interface SizingRecommendation {
     storage_gb: number | null;
     storage_note: string;
   };
+  // Filled from the healthcheck (Phase 7): working-set-vs-cache fit + storage tiering.
+  cache_fit?: {
+    wt_cache_gib: number | null;
+    bytes_in_cache_gib: number | null;
+    cache_fill_pct: number | null;
+    logical_data_gb: number | null;
+    on_disk_gb: number | null;
+    compression_ratio: number | null;
+    working_set_fits_in_cache: boolean;
+    data_to_cache_ratio: number | null;
+    note: string;
+  } | null;
+  storage_sizing?: {
+    on_disk_gb: number | null;
+    recommended_with_growth_gb: number | null;
+    min_tier_for_storage: string | null;
+    min_tier_max_disk_gb: number | null;
+    note: string;
+  } | null;
   options?: SizingOption[];
   recommended?: string;
   recommended_confidence?: number;

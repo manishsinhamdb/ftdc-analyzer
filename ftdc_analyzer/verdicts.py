@@ -17,6 +17,7 @@ from ftdc_analyzer import decoder
 from ftdc_analyzer import signatures
 from ftdc_analyzer import scorer as _scorer
 from ftdc_analyzer import sizing as _sizing
+from ftdc_analyzer import healthcheck as _healthcheck
 from ftdc_analyzer.ruleset import build_ruleset as _build_ruleset
 from ftdc_analyzer.ruleset.overrides import load_overrides as _load_overrides
 
@@ -842,6 +843,120 @@ def build_facts(meta_doc, wt_cache_bytes=None, uptime_seconds=None):
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
+def _enrich_structural(assessment_v2, hc_parsed):
+    """Merge healthcheck-derived dynamic recommendations + concrete evidence into the
+    scored Structural-Design categories (additive — does not alter scoring/ledgers)."""
+    structural = (hc_parsed or {}).get("structural") or {}
+    for r in assessment_v2.get("ranked", []):
+        spec = structural.get(r.get("id"))
+        if not spec or r.get("status") != "scored":
+            continue
+        # Dynamic, number-explicit recommendation (drop list / reclaimable GB / anti-patterns).
+        if spec.get("recommendation") and not r.get("recommendation_conditioned"):
+            r["recommendation"] = spec["recommendation"]
+            r["recommendation_healthcheck"] = True
+        # Concrete evidence object for the UI (drop list, redundant pairs, flagged collections).
+        r["healthcheck_evidence"] = spec.get("evidence")
+        for cav in spec.get("caveats", []):
+            if cav not in r["caveats"]:
+                r["caveats"].append(cav)
+
+
+def _assemble_assessment(sig_stats, ruleset, available_inputs, provided_inputs,
+                         target_category, intent, hc_parsed,
+                         provided_healthcheck, provided_profiler):
+    """Run the scorer, enrich structural categories from the healthcheck, and record the
+    supplied file paths. Shared by the FTDC and healthcheck-only assemblers."""
+    assessment_v2 = _scorer.score(sig_stats, available_inputs, ruleset,
+                                  target_category=target_category, intent=intent,
+                                  provided_inputs=provided_inputs)
+    if hc_parsed:
+        _enrich_structural(assessment_v2, hc_parsed)
+    assessment_v2["provided_paths"] = {
+        k: v for k, v in (("healthcheck", provided_healthcheck),
+                          ("profiler", provided_profiler)) if v
+    }
+    return assessment_v2
+
+
+def build_results_healthcheck_only(healthcheck_path, target_category=None,
+                                   ruleset_overrides_path=None, intent=None,
+                                   provided_profiler=None, cloud="aws"):
+    """Assemble a results dict from a healthcheck snapshot ALONE (no FTDC capture).
+
+    Produces the healthcheck block, the scored Structural-Design categories, and a sizing
+    recommendation from the healthcheck host/storage facts. Time-series-dependent surfaces
+    (charts / signals / verdicts) are intentionally empty and marked unavailable — there is
+    no FTDC capture to derive them from. Decoder untouched (never imported here)."""
+    hc = _healthcheck.parse_healthcheck(healthcheck_path)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    host_facts = hc["host"]
+
+    overrides_path = ruleset_overrides_path or os.environ.get("FTDC_RULESET_OVERRIDES")
+    ruleset = _build_ruleset(overrides_path)
+
+    # Healthcheck is AVAILABLE for scoring (structural categories score); profiler stays
+    # intake-only; FTDC is absent → capacity/incident categories show requires_input(ftdc).
+    sig_stats = dict(hc["scoring_stats"])
+    available_inputs = {"healthcheck"}
+    provided_inputs = set()
+    if provided_profiler:
+        provided_inputs.add("profiler")
+
+    assessment_v2 = _assemble_assessment(
+        sig_stats, ruleset, available_inputs, provided_inputs, target_category, intent,
+        hc, healthcheck_path, provided_profiler)
+    assessment_v2["overrides_applied"] = bool(
+        overrides_path and os.path.exists(overrides_path)) if overrides_path else False
+
+    _tier_tables = _sizing.load_tier_tables(_load_overrides(overrides_path))
+    sizing_recommendation = _sizing.build_sizing_recommendation(
+        host_facts.get("num_cores"), host_facts.get("mem_mb"), sig_stats,
+        assessment_v2["ranked"], cloud, _tier_tables, provided_inputs, intent,
+        healthcheck=hc["sizing"])
+
+    notes = [
+        "Healthcheck-only run: no FTDC capture was provided, so time-series charts, the "
+        "Signals table and the RAM/CPU/Disk time-series verdicts are unavailable. Add an "
+        "FTDC diagnostic.data capture to unlock capacity / incident time-series analysis.",
+        "Structural-Design categories (index health, schema, storage) and the storage/cache "
+        "sizing are fully scored from the healthcheck snapshot.",
+    ] + list(hc.get("notes") or [])
+
+    return {
+        "schema_version": 3,
+        "generated_at": now.isoformat(),
+        "source": {"dir": healthcheck_path, "file_count": 1},
+        "host": {
+            "hostname": host_facts.get("hostname"),
+            "mongo_version": host_facts.get("version"),
+            "num_cores": host_facts.get("num_cores"),
+            "mem_mb": host_facts.get("mem_mb"),
+            "role": host_facts.get("role"),
+            "data_disk": None,
+            "cluster_role": host_facts.get("cluster_role"),
+        },
+        "capture": {"first_ts_iso": None, "last_ts_iso": None,
+                    "span_seconds": 0, "samples": 0},
+        "data_sources": {"ftdc": False, "healthcheck": True,
+                         "profiler": bool(provided_profiler)},
+        "signals": {},
+        "assessment": None,
+        "assessment_v2": assessment_v2,
+        "sizing_recommendation": sizing_recommendation,
+        "healthcheck": hc["report"],
+        "verdicts": None,
+        "cost_optimization": None,
+        "insights": [],
+        "chart_catalog": [],
+        "facts": None,
+        "series": {},
+        "missing_paths": [],
+        "skipped_files": [],
+        "notes": notes,
+    }
+
+
 def build_results(dirpath, on_skip=None, target_category=None,
                   ruleset_overrides_path=None, intent=None,
                   provided_healthcheck=None, provided_profiler=None,
@@ -968,32 +1083,43 @@ def build_results(dirpath, on_skip=None, target_category=None,
     cost_optimization = build_cost_optimization(verdicts)
     assessment = signatures.build_assessment(sig_stats, insights, cost_optimization)
 
+    # --- Healthcheck (CO-PRIMARY input): parse + score the structural categories ---
+    # When a healthcheck snapshot is supplied it becomes an AVAILABLE scoring input (not
+    # merely intake): its derived stats are injected into sig_stats so the Structural-Design
+    # categories produce real verdicts, and its facts feed the sizing engine + report.
+    hc_parsed = None
+    healthcheck_block = None
+    if provided_healthcheck:
+        try:
+            hc_parsed = _healthcheck.parse_healthcheck(provided_healthcheck)
+            sig_stats.update(hc_parsed["scoring_stats"])
+            healthcheck_block = hc_parsed["report"]
+        except Exception as e:  # noqa: BLE001 — a bad healthcheck must not fail the FTDC run
+            notes.append(f"healthcheck snapshot could not be parsed ({type(e).__name__}: {e}); "
+                         "FTDC analysis proceeded without it.")
+
     # --- Layer-2 deterministic scorer (assessment_v2) ---
     # Defaults merged with operator overrides (CLI path arg or FTDC_RULESET_OVERRIDES env).
     overrides_path = ruleset_overrides_path or os.environ.get("FTDC_RULESET_OVERRIDES")
     ruleset = _build_ruleset(overrides_path)
-    # Only FTDC is scored today; healthcheck/profiler categories return requires_input,
-    # or input_provided when the user supplied a file (parsing is a later update).
     available_inputs = {"ftdc"}
     provided_inputs = set()
-    if provided_healthcheck:
-        provided_inputs.add("healthcheck")
+    if hc_parsed:
+        available_inputs.add("healthcheck")  # scored, not just provided
+    elif provided_healthcheck:
+        provided_inputs.add("healthcheck")   # supplied but unparsed → input_provided
     if provided_profiler:
         provided_inputs.add("profiler")
-    assessment_v2 = _scorer.score(sig_stats, available_inputs, ruleset,
-                                  target_category=target_category, intent=intent,
-                                  provided_inputs=provided_inputs)
-    # Record supplied file paths for the future healthcheck/profiler parser.
-    assessment_v2["provided_paths"] = {
-        k: v for k, v in (("healthcheck", provided_healthcheck),
-                          ("profiler", provided_profiler)) if v
-    }
+    assessment_v2 = _assemble_assessment(
+        sig_stats, ruleset, available_inputs, provided_inputs, target_category, intent,
+        hc_parsed, provided_healthcheck, provided_profiler)
 
     # --- Sizing Recommendation (capacity → Atlas tiers; surfaced for sizing/cost intents) ---
     _tier_tables = _sizing.load_tier_tables(_load_overrides(overrides_path))
     sizing_recommendation = _sizing.build_sizing_recommendation(
         meta.get("numCores"), meta.get("memSizeMB"), sig_stats,
-        assessment_v2["ranked"], cloud, _tier_tables, provided_inputs, intent)
+        assessment_v2["ranked"], cloud, _tier_tables, provided_inputs, intent,
+        healthcheck=(hc_parsed or {}).get("sizing"))
     assessment_v2["overrides_applied"] = bool(overrides_path and
                                               os.path.exists(overrides_path)) \
         if overrides_path else False
@@ -1009,10 +1135,13 @@ def build_results(dirpath, on_skip=None, target_category=None,
         },
         "capture": {"first_ts_iso": first_iso, "last_ts_iso": last_iso,
                     "span_seconds": span_seconds, "samples": n},
+        "data_sources": {"ftdc": True, "healthcheck": bool(healthcheck_block),
+                         "profiler": bool(provided_profiler)},
         "signals": signals_block,
         "assessment": assessment,
         "assessment_v2": assessment_v2,
         "sizing_recommendation": sizing_recommendation,
+        "healthcheck": healthcheck_block,
         "verdicts": verdicts,
         "cost_optimization": cost_optimization,
         "insights": insights,

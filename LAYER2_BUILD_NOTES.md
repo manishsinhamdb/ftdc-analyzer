@@ -620,3 +620,156 @@ changed (only how results render). Bundles:
 - `app/src-tauri/target/release/bundle/dmg/FTDC Analyzer_0.1.0_aarch64.dmg` — 26 MB
 Files touched: index.css, lib/ftdc.ts, RangeSelector, App.tsx, ExploreView, TimeSeriesChart
 (unchanged), AssessmentV2Panel (redesign), narration.ts, + new MiniGame.tsx. Staged, uncommitted.
+
+---
+
+# Phase 7 — Healthcheck (getMongoData) as a CO-PRIMARY input
+
+Parse the getMongoData snapshot, SCORE the three Structural-Design categories from it, fill
+the sizing storage + cache-fit, render a rich Healthcheck Report, relax the wizard so EITHER
+FTDC or healthcheck (or both) drives a run, and add a light "report" theme. ADDITIVE; the FTDC
+decoder is untouched and never imported by the new parser. Validated on the real
+`files/upload/healthcheck/output_ludo.json` (getMongoData v0.11).
+
+## A21. Healthcheck scored via the EXISTING scorer (no scorer-logic change)
+Rather than a second scoring path, the parser injects healthcheck-derived scalar signals into
+the same `sig_stats` dict the scorer already reads (keys prefixed `hc_`), and the three
+structural categories were upgraded stub→deep with `required_inputs=["healthcheck"]` and
+active signals over those keys. So the ledger/confidence/conditioning machinery is reused
+verbatim; only ruleset DATA changed (authorized by this task — "wire parsed facts into the
+ruleset/scorer … upgrade categories from stub→active"). `required_inputs` dropped FTDC (the
+signals are purely healthcheck-derived) so the categories also score on a healthcheck-ONLY run.
+
+## A22. Co-primary, two assemblers
+`verdicts.build_results(...)` (FTDC) now parses a supplied healthcheck, merges its `hc_*`
+stats into `sig_stats`, adds `"healthcheck"` to `available_inputs` (so structural categories
+score, not `requires_input`), enriches the scored categories with the concrete drop-list /
+reclaimable / anti-pattern evidence + a generated recommendation (`_enrich_structural`), feeds
+the real storage to sizing, and emits a top-level `healthcheck` block + `data_sources`. A new
+sibling assembler `verdicts.build_results_healthcheck_only(...)` produces a results dict from a
+healthcheck ALONE — same structural scoring + sizing, with `series/verdicts/facts` empty and a
+note that time-series surfaces need FTDC. A bad healthcheck never fails an FTDC run
+(try/except → note). FTDC-only is byte-for-byte unchanged (verified: scored 5 / requires_input
+5 / stub 6, matching the original Ludo-05 baseline).
+
+## A23. Decimal GB for on-disk sizes; GiB for RAM/cache
+The team tool reports "2.51 GB reclaimable" (disk-vendor DECIMAL GB). Storage/index/data sizes
+are therefore decimal (GB=1e9, TB=1e12); RAM and WiredTiger cache stay GiB (how mongod reports
+the configured cache). Both are labeled distinctly so they're never conflated. (Same care for
+wire/network compression vs storage block compression — surfaced as separate fields.)
+
+## A24. getMongoData nesting gotcha
+`metrics`, `network` and `wiredTiger` live UNDER `serverInfo` (not top-level) in the v0.11
+schema; `databaseStats[].collectionstats[]` holds the per-collection stats. The parser is
+fully Extended-JSON aware ($numberLong/$numberInt/$date) and defensive (missing → null + note,
+never raises except on an unreadable/non-JSON file).
+
+## (a) Parser coverage (`ftdc_analyzer/healthcheck.py`) + validation on output_ludo.json
+Extracted & validated against the team tool's numbers:
+- server: community 3.6.17 wiredTiger, 16 vCPU, 61.5 GB RAM, uptime 27.38 d, WT cache 30.24 GiB
+  (80% full / 24.19 GiB in use), connections 133/204667/943054, pageFaults 1819.
+- topology: replSet **ludo_prod**, clusterRole **shardsvr**, 3 members = **1 arbiter (id 12,
+  priority 0) + 2 electable priority-5 (id 14,15)** → data-bearing 2 / electable 2 ✓.
+- replication/oplog: logSize 60000 MB, used 59764 MB (99.6%), **timeDiffHours 25.71** ✓.
+- storage: logical **5.2 TB** / on-disk **3.03 TB** / **1.718× compression** ✓; 2 DBs, 8
+  collections, 33 indexes; block_compressor snappy ×8.
+- indexes: **13 unused** (ops=0, _id_ excluded), all 13 droppable, **reclaimable 2.512 GB
+  (2,512,470,016 B)** ✓; **5 prefix/shadow-redundant pairs** incl. **parchisi.users id_1↔id_1_1**
+  ✓ (also imei/serialNo/user_playstore_email/user_referral_code _1↔_1_1). Redundancy detector
+  does key-prefix (single covered by compound) AND name-shadow (`x_1` shadowed by `x_1_1`);
+  unique indexes are flagged not-droppable (none unique here).
+- ops: opcounters + per-sec averages (query 387.7/s), document metrics, TTL; WiredTiger fs/op
+  read/write latency histograms (4 groups; op_read tail 30.6%).
+- network: bytesIn 4377 GiB / bytesOut 65931 GiB, egress÷ingress **15.1× (read-heavy)** =
+  "write amplification"; wire snappy compression active (1.79×) reported SEPARATELY from storage
+  block snappy.
+- security: community edition gaps (CSFLE/QE, auditing, LDAP/Kerberos, in-mem/at-rest); 4 posture
+  warnings (bindIp 0.0.0.0, authorization not enabled, no TLS, clusterAuthMode undefined); launch
+  args + dbPath/journal.
+- **Unparsed/deferred getMongoData fields** (next-phase parity): `shardDistribution` (null in this
+  capture), `transactions` block, per-member `secondaryDelaySecs`/`tags` beyond count, hostInfo
+  OS/kernel details (not in this snapshot's serverInfo), and any `collMod`/validation rules — none
+  affect the current scoring or report sections.
+
+## (b) Structural scoring + index disambiguators (Ludo, both FTDC+HC and HC-only)
+All three Structural-Design categories SCORE and FIRE:
+- **index_health_bloat** conf **1.0** (unused>0 ·0.40 with a `hc_uptime_days>7` enable
+  disambiguator baking the "counts since restart (27.4d)" caveat into the ledger; reclaimable
+  >0.5 GB ·0.30; redundant pairs>0 ·0.30). Recommendation = the concrete drop list with ~2.51 GB
+  + the 3 honest caveats (uptime window / confirm across all members / unique retained).
+- **schema_datamodel** conf **0.75** (max avg-doc 16.6 KB >10 ·0.40; max indexes/coll 15 >12
+  ·0.35; index:data% only on >100 MB collections, 9.6% < 50 → 0). Flags large-doc + over-indexed
+  parchisi.users.
+- **storage_capacity_design** conf **1.0** (data÷cache 160× >5 ·0.50; on-disk÷RAM 45.8× >15
+  ·0.30; compression 1.72× <2.0 ·0.20).
+Cross-category conditioning: a fired `schema_datamodel` now **resolves the capacity cards'
+"provide healthcheck to disambiguate" caveat** (the category flips from requires_input→scored)
+and, via a new `_SCHEMA_FLIP` conditional recommendation, swaps the capacity advice to
+"address the data model / index hygiene first." The profiler dimension (query_targeting) still
+correctly shows its requires-profiler caveat. Verified on FTDC+HC Ludo: disk_io_saturation fired
+0.72, recommendation_conditioned=True (schema swap), profiler caveat retained.
+
+## (c) Sizing storage + cache-fit (`sizing.py`)
+With the healthcheck present, `current.storage_gb` = **3025.2 GB** (no more "insufficient data");
+a `cache_fit` block reports working-set-fits-in-cache = **false**, data÷cache **160×**, fill 80%;
+and `storage_sizing` picks the smallest tier whose disk:RAM ratio covers on-disk+30% — **M60**
+(max 7680 GB at 120:1). `--resize-from` reconstructs these facts from the cached `healthcheck`
+report block so a cached-decode cloud/intent change keeps the real storage number.
+
+## (d) Healthcheck Report surface (`app/src/components/HealthcheckReport.tsx`)
+New "Healthcheck" view (sidebar nav, shown when a healthcheck is loaded), six internal tabs:
+**Summary** (edition + CE caveats, hero stats, binary/defaults, RAM-allocation illustration =
+WT-cache / FS-cache split, data sizes & compression, catalog, network I/O + write amplification,
+working-set-vs-cache), **Collections** (per-collection table with high-idx/large-doc flags),
+**Index Analyzer** (unused count + GB, redundant-pair table, drop-candidate + top-accessed lists,
+full index table), **Operations** (opcounters/doc-metrics with per-sec, TTL), **WiredTiger**
+(the 4 latency histograms as bars + cache utilization), **Health & Security** (posture warnings,
+security/config, edition feature gaps, launch args). Descriptive parity; the SCORED intelligence
+lives on the Assessment tab. **Parity gaps deferred**: a per-collection index drill-down modal,
+shard-distribution view (data was null), and a printable/exportable HTML of this report (FTDC
+Export HTML is FTDC-only today) — logged for the next pass.
+
+## (e) Co-primary wizard (`Landing.tsx`, `App.tsx`, `preflight.ts`, `lib.rs`)
+Step 1 shows FTDC and healthcheck as co-equal **primary** inputs (profiler optional); "Run" is
+gated on at least one primary present (not FTDC-required). Intent lock-flags adapt to the inputs
+actually provided (healthcheck-only → capacity/incident intents show "needs FTDC"; structural /
+sizing fully available). `classifyRun` now treats any input-file change (incl. healthcheck/
+profiler) as re-analyze and is healthcheck-only aware. Rust `analyze_path` takes `path:
+Option<String>` and omits the FTDC positional when absent (engine detects healthcheck-only mode
+from `--healthcheck` + no positional). A healthcheck-only run hides the FTDC-only nav items +
+the mini-game, defaults to the Healthcheck view, and marks "no time-series" in the header.
+
+## (f) Light "report" theme (`index.css`, `lib/theme.ts`, `main.tsx`, `App.tsx`)
+A `.light` CSS-variable block (white cards, calm grey-on-#f5f8fb, MongoDB-green-for-light
+`#00824e`, subtle borders; colour reserved for meaning) alongside the unchanged dark default.
+Toggle (sun/moon) in the source bar; persisted to `localStorage["ftdc.theme"]` and applied on
+`<html>` before first paint (no flash). Scrollbars + toasts are theme-aware. Dark is untouched.
+
+## (g) Validation summary (output_ludo.json)
+- Parser numbers all match the team tool (see (a)) — engine asserts green.
+- Structural categories score + fire; index disambiguators + caveats present (see (b)).
+- Sizing shows real storage 3025 GB + cache-fit (no "insufficient data") (see (c)).
+- HC-only run end-to-end: `cli --healthcheck … --out-dir` → results.json (94 KB, healthcheck
+  block + scored structural + sizing) + empty metrics_full; `data_sources.ftdc=false`. ✓
+- FTDC-only unchanged (scored 5 / requires_input 5 / stub 6 baseline). ✓
+- FTDC+HC enriches: 8 scored / 4 fired; schema flip resolves the capacity caveat; sizing
+  provisioned_iops @ 0.72 with storage filled. ✓
+- `tsc --noEmit` ✓, `cargo check` ✓.
+- GUI click-through remains the one manual step (no headless GUI here).
+
+## (h) Build result
+`make app` → **EXIT 0** (sidecar rebuilt, vite ✓, cargo ✓, tsc ✓). The **bundled** PyInstaller
+sidecar was verified to parse the healthcheck and produce the scored structural categories
+(index 1.0 / schema 0.75 / storage 1.0, all fired), the drop-13 / 2.51 GB / 5-redundant-pair
+report, sizing storage 3025 GB, and the ludo_prod 1-arbiter+2-electable topology — and
+`--dump-ruleset` carries the three structural categories as DEEP + healthcheck-scored (so the
+packaged Methodology panel reflects them). Bundles:
+- `app/src-tauri/target/release/bundle/macos/FTDC Analyzer.app` — 36 MB
+- `app/src-tauri/target/release/bundle/dmg/FTDC Analyzer_0.1.0_aarch64.dmg` — 26 MB
+New files: `ftdc_analyzer/healthcheck.py`, `app/src/components/HealthcheckReport.tsx`,
+`app/src/lib/theme.ts`. Engine: verdicts (parse+enrich+HC-only assembler), sizing (storage +
+cache-fit), ruleset/defaults (3 structural deep + schema flip), cli (HC-only + resize-from HC).
+App: App.tsx (healthcheck view, co-primary flow, theme toggle, nullable-field guards), Landing
+(co-primary inputs), preflight (input-aware classifyRun), ftdc.ts/sizing.ts types, index.css
+(light theme), main.tsx (theme apply). Rust lib.rs (`analyze_path` path Optional). Left
+**staged, uncommitted** (no commit/tag/push). GUI click-through is the one remaining manual step.
