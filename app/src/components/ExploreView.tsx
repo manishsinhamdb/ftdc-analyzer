@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Compass, Search } from "lucide-react";
+import { Compass, Search, X } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ import {
   type MetricFull,
   type MetricsFull,
   type SeriesData,
+  LINE_PALETTE,
   fmtNum,
 } from "@/lib/ftdc";
 
@@ -117,6 +118,14 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
 
   const seriesMap: Record<string, SeriesData> = {};
   for (const m of selectedMetrics) seriesMap[m.path] = { t, v: applyMode(m, mode, t) };
+
+  // A selected metric has data only if its (mode-applied) series has any finite value.
+  const hasData = (path: string) => {
+    const sd = seriesMap[path];
+    return !!sd && sd.v.some((x) => x !== null && x !== undefined && Number.isFinite(x));
+  };
+  const colorFor = (path: string) =>
+    LINE_PALETTE[Math.max(0, selected.indexOf(path)) % LINE_PALETTE.length];
 
   const spec: ChartSpec = {
     title:
@@ -238,13 +247,24 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
                             : "text-muted-foreground hover:bg-secondary/40")
                       }
                     >
-                      <span className="truncate font-mono">{m.path}</span>
-                      <Badge
-                        variant="outline"
-                        className="shrink-0 px-1 py-0 text-[9px] text-muted-foreground"
-                      >
-                        {m.kind === "counter" ? "C" : "G"}
-                      </Badge>
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        {on && (
+                          <span className="size-2.5 shrink-0 rounded-[2px]" style={{ background: colorFor(m.path) }} />
+                        )}
+                        <span className="truncate font-mono">{m.path}</span>
+                      </span>
+                      {on && !hasData(m.path) ? (
+                        <Badge className="shrink-0 px-1 py-0 text-[9px]" style={{ backgroundColor: "#E05C4B", color: "#0D1B2A" }}>
+                          no data
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className="shrink-0 px-1 py-0 text-[9px] text-muted-foreground"
+                        >
+                          {m.kind === "counter" ? "C" : "G"}
+                        </Badge>
+                      )}
                     </button>
                   );
                 })}
@@ -260,6 +280,32 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
 
         {/* Right: chart + summary */}
         <div className="space-y-4">
+          {/* Selected-metric chips — line colour matches the chart; red flag if empty. */}
+          {selected.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {selected.map((p) => {
+                const nd = !hasData(p);
+                return (
+                  <span
+                    key={p}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5 text-[11px]"
+                  >
+                    <span className="size-2.5 shrink-0 rounded-[2px]" style={{ background: colorFor(p) }} />
+                    <span className="font-mono">{shortLabel(p)}</span>
+                    {nd && (
+                      <span className="rounded bg-destructive/20 px-1 text-[9px] font-semibold text-destructive">
+                        no data
+                      </span>
+                    )}
+                    <button onClick={() => toggle(p)} title="Remove" className="text-muted-foreground hover:text-foreground">
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
           <div className="flex items-center justify-end gap-1 rounded-md border border-border bg-card p-1">
             <span className="mr-auto pl-2 text-xs text-muted-foreground">View</span>
             {(["raw", "rate"] as const).map((mo) => (

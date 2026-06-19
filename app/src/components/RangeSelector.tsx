@@ -9,6 +9,7 @@ import {
   PRESETS,
   fmtAxisDate,
   fmtSpan,
+  humanBucketDuration,
   rangeForPreset,
 } from "@/lib/ftdc";
 
@@ -111,18 +112,21 @@ export function RangeSelector({
             <LayoutGrid className="size-3.5 text-muted-foreground" />
             <span className="text-[11px] font-medium text-muted-foreground">Granularity</span>
             <div className="flex items-center gap-1 rounded-md border border-border bg-background/40 p-1">
-              {GRANULARITIES.map((g) => (
-                <Button
-                  key={g.key}
-                  size="sm"
-                  variant={granularity === g.buckets ? "default" : "ghost"}
-                  className="h-7 px-2.5 text-xs"
-                  title={`~${g.buckets} buckets — whole range always shown, just at this resolution`}
-                  onClick={() => onGranularityChange(g.buckets)}
-                >
-                  {g.label}
-                </Button>
-              ))}
+              {GRANULARITIES.map((g) => {
+                const dur = humanBucketDuration(value[1] - value[0], g.buckets);
+                return (
+                  <Button
+                    key={g.key}
+                    size="sm"
+                    variant={granularity === g.buckets ? "default" : "ghost"}
+                    className="h-7 px-2.5 text-xs"
+                    title={`${g.label} · ~${g.buckets} buckets — the whole range is always shown, just at this bucket size`}
+                    onClick={() => onGranularityChange(g.buckets)}
+                  >
+                    {dur}
+                  </Button>
+                );
+              })}
             </div>
           </div>
         )}

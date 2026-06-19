@@ -565,3 +565,58 @@ union verified (Right-sizing+Cost → 5 deduped cats). Bundles:
 - `app/src-tauri/target/release/bundle/macos/FTDC Analyzer.app` — 36 MB
 - `app/src-tauri/target/release/bundle/dmg/FTDC Analyzer_0.1.0_aarch64.dmg` — 26 MB
 Left **staged, uncommitted**.
+
+---
+
+# UAT polish pass (contrast, granularity, tabs, overview, explore, Assessment redesign, mini-game)
+
+Display-only; decoder/scorer/ruleset logic untouched.
+
+1. **Contrast**: lifted `--muted-foreground` #8AA0B6 → **#AEBFD2** (both theme blocks) — global,
+   secondary text now comfortably readable; hierarchy (foreground > secondary > muted) preserved.
+2. **Granularity → durations**: granularity buttons now show the approximate bucket DURATION,
+   computed dynamically as `humanBucketDuration(rangeSpan ÷ targetBuckets)` snapped to a ladder
+   (1m/5m/10m/30m/1h/2h/6h/12h/1d) → e.g. ~6-day range shows "~2h / ~40m / ~12m / ~3m"; recomputes
+   when the range changes; the qualifier (Coarse/Medium/…) moved to the tooltip.
+3. **Category tabs**: bolder (`font-semibold`); color-coded — selected = green (active state),
+   has-data = foreground, no-data/locked = dimmed + lock icon (a category is "locked" when all its
+   charts are placeholders).
+4. **Overview**: (a) overlap/clip fixed — the verbose 4-col per-check Table in each verdict card
+   (the clip source) was removed; cards are now `min-w-0 overflow-hidden`. (b) Slimmed to a glance:
+   verdict cards show verdict + confidence + headline + recommended-vCPUs + a compact check summary
+   (counts + worst breach) + "Full evidence on the Assessment & Signals tabs"; the full per-check
+   detail now lives only on the deep Assessment/Signals (logged: moved the check table off Overview).
+5. **Memory min/max band**: confirmed the engine already emits {mean,min,max} for ALL series incl.
+   mem_resident_gb / cache_used_pct / page_cache_gb (verified 2500-pt min/max arrays); TimeSeriesChart
+   renders the band for them via bucketSeries — no code change needed (was resolved by Brief A's band work).
+6. **Explore**: added a selected-metric chips strip + left-list swatches whose colour matches the
+   chart line (LINE_PALETTE by selection order); a selected metric with no finite data shows an explicit
+   red "no data" badge (chip + list) instead of silently plotting nothing.
+7. **Assessment 3-layer redesign** (see structure below).
+8. **Loading mini-game** (`MiniGame.tsx`): original canvas endless-runner ("Leafy", a green rounded
+   sprite, hops over blue data-shard pillars) — all simple shapes, no external/copyrighted assets, no
+   storage. Space/↑/click to jump; score; crash→retry. Shown as a full overlay during a full analyze
+   decode; results load underneath; on completion a "Your analysis is ready — Go to results / Keep
+   playing" banner appears (never auto-navigates away). Only shown for full analyze() (not instant
+   cached opens). Errors dismiss the overlay to surface the message.
+
+## Assessment redesign structure (item 7, inverted pyramid)
+- **Layer 1 — Verdict (hero):** bold recommended action + confidence + the driving constraint for the
+  selected lens (e.g. "Cost optimization → Provisioned IOPS → M60 · 72% · driver: Disk I/O Saturation
+  fired"), plus the key caveat; the **Sizing Recommendation** (current→recommended tier cards) renders
+  in this layer as the concrete artifact (moved out of App into the panel to avoid duplication).
+- **Layer 2 — Reasoning (story arc):** three labelled sections — "What we found / Why it points here
+  (not elsewhere) / What would change this conclusion". Grounded mode synthesizes them deterministically
+  from the ledger (`buildGroundedReasoning`); LLM mode renders the model's prose (prompt now asks for
+  those exact 3 headings) and falls back to the deterministic synthesis if the LLM fails.
+- **Layer 3 — Evidence (collapsible, default closed):** per-category cards + full ledgers grouped + ranked:
+  Fired → Clear (scored, didn't fire) → Awaiting input → Declared (stubs). Nothing removed — progressively
+  disclosed. Mode/model/category controls sit in a slim bar above Layer 1.
+
+## Build result
+`make app` → **EXIT 0** (tsc ✓, cargo ✓, vite ✓). Display-only pass — no Python/Rust logic
+changed (only how results render). Bundles:
+- `app/src-tauri/target/release/bundle/macos/FTDC Analyzer.app` — 36 MB
+- `app/src-tauri/target/release/bundle/dmg/FTDC Analyzer_0.1.0_aarch64.dmg` — 26 MB
+Files touched: index.css, lib/ftdc.ts, RangeSelector, App.tsx, ExploreView, TimeSeriesChart
+(unchanged), AssessmentV2Panel (redesign), narration.ts, + new MiniGame.tsx. Staged, uncommitted.

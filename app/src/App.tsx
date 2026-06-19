@@ -17,6 +17,7 @@ import {
   History,
   Home,
   Loader2,
+  Lock,
   MemoryStick,
   PanelLeftClose,
   PanelLeftOpen,
@@ -44,14 +45,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 
 import { TimeSeriesChart, ChartPlaceholder } from "@/components/TimeSeriesChart";
 import { SignalsTable, type Thresholds } from "@/components/SignalsTable";
@@ -61,7 +54,6 @@ import { SystemView } from "@/components/SystemView";
 import { ExploreView } from "@/components/ExploreView";
 import { AssessmentPanel } from "@/components/AssessmentPanel";
 import { AssessmentV2Panel } from "@/components/AssessmentV2Panel";
-import { SizingPanel } from "@/components/SizingPanel";
 import { resizeFromCache } from "@/lib/sizing";
 import { MethodologyRules } from "@/components/MethodologyRules";
 import { type AssessmentMode } from "@/components/AssessmentControls";
@@ -77,6 +69,7 @@ import {
 } from "@/lib/preflight";
 import { Landing } from "@/components/Landing";
 import { LlmSettings } from "@/components/LlmSettings";
+import { MiniGame } from "@/components/MiniGame";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -87,7 +80,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 import {
-  type Check,
   type ChartSpec,
   type FtdcResults,
   type MetricsFull,
@@ -166,20 +158,19 @@ function buildThresholds(verdicts: FtdcResults["verdicts"]): Thresholds {
   return m;
 }
 
-function StatusCell({ status }: { status: Check["status"] }) {
-  return (
-    <span className="font-semibold" style={{ color: STATUS_COLORS[status] ?? "#8AA0B6" }}>
-      {status}
-    </span>
-  );
-}
-
+// Overview verdict card — glanceable only. Full per-check evidence lives on the
+// Assessment tab (capacity ledgers) + Signals; here we show the verdict, confidence,
+// headline, recommended vCPUs, and a compact check summary (the worst breach).
 function VerdictCard({ id, v }: { id: string; v: Verdict }) {
   const meta = VERDICT_META[id];
   const Icon = meta.icon;
   const color = VERDICT_COLORS[v.verdict] ?? "#8AA0B6";
+  const counts = { PASS: 0, WARN: 0, FAIL: 0, NA: 0 } as Record<string, number>;
+  for (const c of v.checks) counts[c.status] = (counts[c.status] ?? 0) + 1;
+  const worst =
+    v.checks.find((c) => c.status === "FAIL") ?? v.checks.find((c) => c.status === "WARN");
   return (
-    <Card className="flex flex-col">
+    <Card className="flex min-w-0 flex-col overflow-hidden">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -208,32 +199,24 @@ function VerdictCard({ id, v }: { id: string; v: Verdict }) {
             </span>
           </div>
         )}
-        <p className="text-xs leading-relaxed text-muted-foreground">{v.recommendation}</p>
+        <p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">{v.recommendation}</p>
         <Separator className="my-1" />
-        <Table>
-          <TableHeader>
-            <TableRow className="border-border hover:bg-transparent">
-              <TableHead className="h-7 px-2 text-xs">check</TableHead>
-              <TableHead className="h-7 px-2 text-right text-xs">value</TableHead>
-              <TableHead className="h-7 px-2 text-right text-xs">thr</TableHead>
-              <TableHead className="h-7 px-2 text-right text-xs">status</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {v.checks.map((c) => (
-              <TableRow key={c.name} className="border-border hover:bg-secondary/40">
-                <TableCell className="px-2 py-1 text-xs">{c.name}</TableCell>
-                <TableCell className="px-2 py-1 text-right font-mono text-xs">{fmtNum(c.value)}</TableCell>
-                <TableCell className="px-2 py-1 text-right font-mono text-xs text-muted-foreground">
-                  {c.threshold == null ? "n/a" : c.threshold}
-                </TableCell>
-                <TableCell className="px-2 py-1 text-right text-xs">
-                  <StatusCell status={c.status} />
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+          <span className="text-muted-foreground">{v.checks.length} checks:</span>
+          {(["FAIL", "WARN", "PASS"] as const).map((s) =>
+            counts[s] ? (
+              <span key={s} className="font-semibold" style={{ color: STATUS_COLORS[s] ?? "#8AA0B6" }}>
+                {counts[s]} {s}
+              </span>
+            ) : null,
+          )}
+          {worst && (
+            <span className="ml-auto font-mono text-muted-foreground" title={`${worst.name} = ${fmtNum(worst.value)}`}>
+              worst: {worst.name}
+            </span>
+          )}
+        </div>
+        <p className="text-[10px] text-muted-foreground">Full evidence on the Assessment &amp; Signals tabs.</p>
       </CardContent>
     </Card>
   );
@@ -279,6 +262,9 @@ export default function App() {
   });
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
   const [llmOpen, setLlmOpen] = useState(false); // LLM Settings modal
+  // Loading mini-game shown over a full (re-)analyze decode; results load underneath.
+  const [gameOpen, setGameOpen] = useState(false);
+  const [gameReady, setGameReady] = useState(false);
   // Opt-in gate for the Automated Assessment. Default OFF so the default view is
   // unbiased. HOOK POINT: when wired, flipping this on should trigger the future
   // local-LLM assessment run (today it just reveals the deterministic pass).
@@ -456,6 +442,8 @@ export default function App() {
       return;
     }
     setAnalyzing(true);
+    setGameReady(false);
+    setGameOpen(true); // show the mini-game during the long decode
     try {
       const res = await invoke<{ dir: string; hostname: string }>("analyze_path", {
         path: selectedPath,
@@ -469,6 +457,7 @@ export default function App() {
       setGenerateAssessment(true);
       const loaded = await loadFrom(res.dir, `${res.hostname} (live)`);
       setView("overview");
+      setGameReady(true); // results loaded underneath the game → show "ready" prompt
       toast.success(`Analyzed ${res.hostname}`);
       const entry: RunHistoryEntry = {
         hostname: res.hostname,
@@ -494,6 +483,7 @@ export default function App() {
         cloud,
       });
     } catch (e) {
+      setGameOpen(false); // surface the error on the landing screen
       toast.error(`Analysis failed: ${String(e)}`);
     } finally {
       setAnalyzing(false);
@@ -655,6 +645,7 @@ export default function App() {
           onOpenLlmSettings={() => setLlmOpen(true)}
         />
         <LlmSettings open={llmOpen} onOpenChange={setLlmOpen} />
+        {gameOpen && <MiniGame ready={gameReady} onGoToResults={() => setGameOpen(false)} />}
         <Toaster richColors position="bottom-right" theme="dark" />
       </>
     );
@@ -919,16 +910,25 @@ export default function App() {
                   Category
                 </div>
                 <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-card p-1">
-                  {data.chart_catalog.map((cat) => (
-                    <TabsTrigger
-                      key={cat.category}
-                      value={cat.category}
-                      className="text-xs data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-                    >
-                      {cat.category}
-                      <span className="ml-1 opacity-70">({cat.charts.length})</span>
-                    </TabsTrigger>
-                  ))}
+                  {data.chart_catalog.map((cat) => {
+                    const hasData = cat.charts.some(
+                      (ch) => !ch.data_state || ch.data_state === "present",
+                    );
+                    return (
+                      <TabsTrigger
+                        key={cat.category}
+                        value={cat.category}
+                        className={
+                          "gap-1 text-xs font-semibold data-[state=active]:bg-primary data-[state=active]:text-primary-foreground " +
+                          (hasData ? "text-foreground" : "text-muted-foreground/60")
+                        }
+                      >
+                        {!hasData && <Lock className="size-3" />}
+                        {cat.category}
+                        <span className="ml-0.5 font-normal opacity-70">({cat.charts.length})</span>
+                      </TabsTrigger>
+                    );
+                  })}
                 </TabsList>
                 <RangeSelector
                   capture={data.capture}
@@ -968,9 +968,6 @@ export default function App() {
           {data && view === "inference" && (
             generateAssessment && data.assessment ? (
               <div className="space-y-4">
-                {data.sizing_recommendation?.applies_to_intent && (
-                  <SizingPanel sizing={data.sizing_recommendation} />
-                )}
                 {data.assessment_v2 && (
                   <AssessmentV2Panel
                     v2={data.assessment_v2}
@@ -1029,6 +1026,7 @@ export default function App() {
         </main>
       </div>
       <LlmSettings open={llmOpen} onOpenChange={setLlmOpen} />
+      {gameOpen && <MiniGame ready={gameReady} onGoToResults={() => setGameOpen(false)} />}
       <Toaster richColors position="bottom-right" theme="dark" />
     </div>
   );

@@ -1,7 +1,41 @@
 # FTDC Analyzer — Project Status & Handoff
 
 > Working handoff doc. Snapshot of what's **done** and what's **pending** so the next phase
-> can start cold. Last updated at the end of the Atlas-parity metrics phase.
+> can start cold.
+
+---
+
+## ★ START HERE (current state — updated 2026-06-19)
+
+**Read `LAYER2_BUILD_NOTES.md` (repo root) first** — it's the running decisions log + per-brief
+reports (decisions A1–A20+) and holds most of the current context. Then skim `git log`.
+
+**Since the original handoff below, the "Layer-2" line of work shipped (committed on `main`):**
+- **Engine (Python):** declarative ruleset (`ftdc_analyzer/ruleset/` — 16 categories across 6
+  families, 5 deep + 11 stub), a two-pass conditioned **scorer** (`scorer.py` → `assessment_v2`
+  with evidence ledgers + intent lenses, single & multi-intent union), an Atlas **sizing engine**
+  (`sizing.py` + `tier_tables/{aws,gcp,azure}.json`), and **fine `{mean,min,max}` series**.
+  `build_results` lives in **`verdicts.py`**. New `cli.py` flags: `--intent`, `--target-category`,
+  `--cloud`, `--healthcheck`, `--profiler`, `--ruleset-overrides`, `--dump-ruleset`, `--resize-from`.
+- **App (React/TS + Rust):** a guided **pre-flight wizard** (Inputs → Intent → Mode → Review +
+  history purge + mini-game loading screen), **LLM provider manager** (OpenAI + Anthropic dialects,
+  `llm.rs`/`llm.ts`/`LlmSettings.tsx`), the **Assessment v2 panel** (3-layer: Verdict → Reasoning →
+  Evidence), **Sizing panel**, **Methodology & Rules** view, Atlas-style **chart granularity/range/
+  drag-zoom + min/max bands**, collector helper (`collectors/getMongoData.js`), and UI polish
+  (contrast, scrollbars, fonts).
+
+**Working conventions (important):**
+- **Leave changes staged; do NOT commit/tag/push** unless the task explicitly says so (the user
+  reviews diffs + controls commit grouping). Commit messages end with the Co-Authored-By trailer.
+- **Additive only:** never touch `decoder.py` / decode logic; for display/UAT tasks don't change
+  scorer/ruleset *logic*, only how results render.
+- **No headless GUI here** — verify at engine (cli on `files/upload/ludo-prod-mongo-05`), HTTP
+  (`cargo test llm::tests -- --ignored`), `tsc --noEmit`, `cargo check`, and `make app` (run in
+  background); always test the **bundled** sidecar for data bundling; flag GUI click-through as pending.
+- Build: `make app` → `.app`/`.dmg` in `app/src-tauri/target/release/bundle/`.
+
+_(The sections below are the ORIGINAL Atlas-parity-phase handoff — still useful for engine/UI
+foundations, but predate Layer-2; the bullets above + LAYER2_BUILD_NOTES.md are the current truth.)_
 
 ---
 

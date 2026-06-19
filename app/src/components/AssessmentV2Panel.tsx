@@ -6,13 +6,15 @@ import {
   FileCheck,
   Flame,
   GitBranch,
+  Layers,
   Lock,
   Loader2,
   Sparkles,
+  Target,
   Upload,
 } from "lucide-react";
 
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   type AssessmentV2,
@@ -29,6 +31,7 @@ import {
   ModeSelector,
   ModelPicker,
 } from "@/components/AssessmentControls";
+import { SizingPanel } from "@/components/SizingPanel";
 
 function ConfidenceBar({ value, threshold }: { value: number; threshold: number }) {
   // Grow from 0 → value on mount for a clear "score builds up" feel.
@@ -230,62 +233,250 @@ function PlaceholderCard({ r }: { r: CategoryResult }) {
   );
 }
 
-function NarrativePanel({
-  narrating,
-  narration,
-  model,
-}: {
-  narrating: boolean;
-  narration: NarrationResult | null;
-  model: string | null;
-}) {
-  if (narrating) {
-    return (
-      <Card className="border-primary/30">
-        <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin text-primary" />
-          Narrating the scored findings with <span className="font-mono text-foreground">{model}</span>…
-        </div>
-      </Card>
-    );
+type Sizing = import("@/lib/sizing").SizingRecommendation;
+
+const pf = (x: number | null | undefined) => (x == null ? "n/a" : `${Math.round(x * 100)}%`);
+
+// Deterministic "story arc" synthesized from the ledger (used in grounded mode, and as the
+// fallback if the LLM narration fails).
+function buildGroundedReasoning(v2: AssessmentV2, sizing?: Sizing | null) {
+  const scored = v2.ranked.filter((r) => r.status === "scored");
+  const lens = scored.filter((r) => r.in_lens !== false);
+  const pool = lens.length ? lens : scored;
+  const fired = pool.filter((r) => r.fired);
+  const clear = pool.filter((r) => !r.fired);
+  const awaiting = v2.ranked.filter(
+    (r) => r.status === "requires_input" || r.status === "input_provided",
+  );
+  const uniq = (a: string[]) => [...new Set(a.filter(Boolean))];
+
+  const found = fired.length
+    ? fired.map((r) => {
+        const top = [...r.ledger]
+          .sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution))
+          .find((e) => e.passed && e.contribution > 0);
+        return `${r.name} fired at ${pf(r.confidence)}${
+          top ? ` — ${top.signal} = ${top.value}${top.unit ? ` ${top.unit}` : ""} (${top.comparator}${top.threshold})` : ""
+        }.`;
+      })
+    : [`No category crossed its fire threshold; the strongest is ${pool[0]?.name ?? "—"} at ${pf(pool[0]?.confidence)}.`];
+
+  const why: string[] = [];
+  if (sizing?.applies_to_intent && sizing.recommended_reason) why.push(sizing.recommended_reason);
+  for (const r of clear) why.push(`${r.name} has headroom (${pf(r.confidence)}, did not fire).`);
+  for (const r of fired) for (const x of r.cross_references) why.push(x.note);
+
+  const change: string[] = [];
+  if (sizing?.conditioning?.workload_caveat) change.push(sizing.conditioning.workload_caveat);
+  for (const r of fired) for (const c of r.caveats) change.push(c);
+  for (const r of awaiting) change.push(`${r.name}: provide ${r.missing_inputs.join(", ")} to confirm.`);
+
+  return { found: uniq(found), why: uniq(why).slice(0, 6), change: uniq(change).slice(0, 6) };
+}
+
+// LAYER 1 — Verdict hero.
+function VerdictHero({ v2, sizing, lead }: { v2: AssessmentV2; sizing?: Sizing | null; lead?: CategoryResult }) {
+  const title = v2.intent?.title ?? "Assessment";
+  let action: string;
+  let conf: number | null;
+  if (sizing?.applies_to_intent && sizing.recommended && sizing.options) {
+    const opt = sizing.options.find((o) => o.id === sizing.recommended);
+    action = opt ? `${opt.label}${opt.tier ? ` → ${opt.tier.name}` : ""}` : sizing.recommended;
+    conf = sizing.recommended_confidence ?? lead?.confidence ?? null;
+  } else {
+    action = lead?.recommendation ?? "No dominant finding — review the evidence below.";
+    conf = lead?.confidence ?? null;
   }
-  if (!narration) return null;
-  if (!narration.ok) {
-    // Graceful fallback — grounded ledger below stays fully usable.
-    return (
-      <Card className="border-[#F5A623]/40 bg-[#F5A623]/5">
-        <div className="flex items-start gap-2 p-4 text-xs text-[#F5A623]">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-          <span>
-            LLM narration unavailable — showing the grounded assessment below.{" "}
-            <span className="text-muted-foreground">
-              {narration.kind ? `[${narration.kind}] ` : ""}
-              {narration.reason}
-            </span>
-          </span>
-        </div>
-      </Card>
-    );
-  }
+  const driver = lead ? `${lead.name} ${lead.fired ? "fired" : "leads"} at ${pf(lead.confidence)}` : "no category fired";
+  const caveat = lead?.caveats?.[0] ?? sizing?.conditioning?.workload_caveat ?? null;
+
   return (
-    <Card className="border-primary/30 bg-gradient-to-br from-card to-secondary/20">
+    <Card className="border-primary/40 bg-gradient-to-br from-card to-secondary/30">
       <CardHeader className="pb-2">
         <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
-          <Sparkles className="size-4 text-primary" /> LLM-reasoned narrative
-          <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">
-            {narration.model ?? model}
+          <Target className="size-4 text-primary" />
+          {title}
+          <Badge variant="outline" className="text-[10px] uppercase text-muted-foreground">verdict</Badge>
+          {conf != null && (
+            <Badge className="ml-auto text-[11px]" style={{ backgroundColor: "#00ED64", color: "#0D1B2A" }}>
+              {pf(conf)} confidence
+            </Badge>
+          )}
+        </CardTitle>
+        {v2.intent && <p className="pt-0.5 text-xs italic text-muted-foreground">{v2.intent.subtitle}</p>}
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <p className="text-base font-semibold leading-snug text-foreground">{action}</p>
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Flame className="size-3.5 text-primary" /> driver: {driver}
+        </p>
+        {sizing?.applies_to_intent && sizing.recommended_reason && (
+          <p className="text-xs leading-relaxed text-foreground/80">{sizing.recommended_reason}</p>
+        )}
+        {caveat && (
+          <p className="flex items-start gap-1.5 rounded-md border border-[#F5A623]/30 bg-[#F5A623]/5 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-[#F5A623]" /> {caveat}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// LAYER 2 — Reasoning (story arc): What we found / Why here / What would change it.
+function ReasoningSection({ label, items }: { label: string; items: string[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">{label}</div>
+      <ul className="space-y-1">
+        {items.map((it, i) => (
+          <li key={i} className="text-xs leading-relaxed text-foreground/85">• {it}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ReasoningLayer({
+  v2,
+  sizing,
+  mode,
+  narration,
+  narrating,
+  model,
+}: {
+  v2: AssessmentV2;
+  sizing?: Sizing | null;
+  mode: AssessmentMode;
+  narration: NarrationResult | null;
+  narrating: boolean;
+  model: string | null;
+}) {
+  const g = buildGroundedReasoning(v2, sizing);
+  const deterministic = (
+    <div className="space-y-3">
+      <ReasoningSection label="What we found" items={g.found} />
+      <ReasoningSection label="Why it points here (not elsewhere)" items={g.why} />
+      <ReasoningSection label="What would change this conclusion" items={g.change} />
+    </div>
+  );
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
+          <Sparkles className="size-4 text-primary" /> Reasoning
+          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+            {mode === "llm" ? `LLM · ${model ?? "—"}` : "grounded"}
           </Badge>
-          <span className="text-[10px] font-normal text-muted-foreground">
-            grounded on the scores below — no new numbers introduced
-          </span>
         </CardTitle>
       </CardHeader>
-      <div className="px-4 pb-4">
-        <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
-          {narration.narrative}
-        </div>
-      </div>
+      <CardContent>
+        {mode === "grounded" && deterministic}
+        {mode === "llm" && narrating && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin text-primary" /> narrating with{" "}
+            <span className="font-mono text-foreground">{model}</span>…
+          </div>
+        )}
+        {mode === "llm" && !narrating && narration?.ok && (
+          <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
+            {narration.narrative}
+          </div>
+        )}
+        {mode === "llm" && !narrating && narration && !narration.ok && (
+          <div className="space-y-3">
+            <div className="flex items-start gap-2 rounded-md border border-[#F5A623]/40 bg-[#F5A623]/5 px-3 py-2 text-[11px] text-[#F5A623]">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              LLM narration unavailable — showing the grounded reasoning.{" "}
+              <span className="text-muted-foreground">
+                {narration.kind ? `[${narration.kind}] ` : ""}
+                {narration.reason}
+              </span>
+            </div>
+            {deterministic}
+          </div>
+        )}
+        {mode === "llm" && !narrating && !narration && deterministic}
+      </CardContent>
     </Card>
+  );
+}
+
+// LAYER 3 — Evidence (collapsed by default; ranked groups).
+function EvidenceGroup({
+  label,
+  color,
+  results,
+  kind,
+  focusId,
+}: {
+  label: string;
+  color: string;
+  results: CategoryResult[];
+  kind: "scored" | "placeholder";
+  focusId?: string | null;
+}) {
+  if (!results.length) return null;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide" style={{ color }}>
+        {label} <span className="text-muted-foreground">({results.length})</span>
+      </div>
+      {kind === "scored" ? (
+        <div className="space-y-2">
+          {results.map((r) => (
+            <ScoredCard key={r.id} r={r} focused={!!focusId && r.id === focusId} />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {results.map((r) => (
+            <PlaceholderCard key={r.id} r={r} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvidenceLayer({
+  fired,
+  clear,
+  awaiting,
+  declared,
+  focusId,
+}: {
+  fired: CategoryResult[];
+  clear: CategoryResult[];
+  awaiting: CategoryResult[];
+  declared: CategoryResult[];
+  focusId?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const total = fired.length + clear.length + awaiting.length + declared.length;
+  return (
+    <div className="space-y-3">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 text-left text-sm font-semibold transition-colors hover:bg-secondary/40"
+      >
+        {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+        <Layers className="size-4 text-primary" /> Evidence
+        <span className="font-normal text-muted-foreground">
+          — {total} categories · {fired.length} fired · ranked, full ledgers
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-4">
+          <EvidenceGroup label="Fired — drove the verdict" color="#00ED64" results={fired} kind="scored" focusId={focusId} />
+          <EvidenceGroup label="Clear — scored, didn't fire" color="#8AA0B6" results={clear} kind="scored" focusId={focusId} />
+          <EvidenceGroup label="Awaiting input" color="#4DA6FF" results={awaiting} kind="placeholder" />
+          <EvidenceGroup label="Declared (stubs)" color="#5A6E82" results={declared} kind="placeholder" />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -302,21 +493,19 @@ export function AssessmentV2Panel({
   onModeChange: (m: AssessmentMode) => void;
   targetCategory: string | null;
   onTargetCategoryChange: (id: string | null) => void;
-  sizing?: import("@/lib/sizing").SizingRecommendation | null;
+  sizing?: Sizing | null;
 }) {
   const [provider, setProvider] = useState<LlmProvider | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [narration, setNarration] = useState<NarrationResult | null>(null);
   const [narrating, setNarrating] = useState(false);
 
-  // provider for the narration call (model is driven by the picker below)
   useEffect(() => {
     getLlmConfig()
       .then((c) => setProvider(activeProvider(c)))
       .catch(() => {});
   }, []);
 
-  // Run narration whenever mode/model/target/data change (LLM mode only).
   useEffect(() => {
     if (mode !== "llm") {
       setNarration(null);
@@ -328,92 +517,51 @@ export function AssessmentV2Panel({
     setNarrating(true);
     setNarration(null);
     runNarration(v2, provider, model, targetCategory, sizing)
-      .then((r) => {
-        if (alive) setNarration(r);
-      })
-      .finally(() => {
-        if (alive) setNarrating(false);
-      });
+      .then((r) => alive && setNarration(r))
+      .finally(() => alive && setNarrating(false));
     return () => {
       alive = false;
     };
   }, [mode, model, targetCategory, provider, v2, sizing]);
 
   let scored = v2.ranked.filter((r) => r.status === "scored");
-  // Client-side targeted focus: surface the chosen category first (engine scores all).
   if (targetCategory) {
     const focus = scored.find((r) => r.id === targetCategory);
     if (focus) scored = [focus, ...scored.filter((r) => r.id !== targetCategory)];
   }
-  const inputProvided = v2.ranked.filter((r) => r.status === "input_provided");
-  const requiresInput = v2.ranked.filter((r) => r.status === "requires_input");
-  const stubs = v2.ranked.filter((r) => r.status === "stub");
-  const pending = [...inputProvided, ...requiresInput];
+  const fired = scored.filter((r) => r.fired);
+  const clear = scored.filter((r) => !r.fired);
+  const awaiting = v2.ranked.filter(
+    (r) => r.status === "requires_input" || r.status === "input_provided",
+  );
+  const declared = v2.ranked.filter((r) => r.status === "stub");
+  const lensFired = fired.filter((r) => r.in_lens !== false);
+  const lead = lensFired[0] ?? fired[0] ?? scored[0];
 
   return (
     <div className="space-y-4">
-      <Card className="border-primary/30 bg-gradient-to-br from-card to-secondary/30">
-        <CardHeader className="pb-2">
-          <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-            <GitBranch className="size-4 text-primary" />
-            {v2.intent ? v2.intent.title : "Deterministic Scoring — Layer 2"}
-            <Badge variant="outline" className="font-normal text-muted-foreground">
-              {targetCategory ? "targeted" : v2.intent ? "intent lens" : "full sweep"}
-            </Badge>
-          </CardTitle>
-          {v2.intent && (
-            <p className="pt-0.5 text-xs italic text-muted-foreground">{v2.intent.subtitle}</p>
-          )}
-          <p className="pt-1 text-xs text-muted-foreground">
-            {v2.counts.scored} scored · {v2.counts.fired} fired ·{" "}
-            {(v2.counts.input_provided ?? 0) + v2.counts.requires_input} awaiting input ·{" "}
-            {v2.counts.stub} declared (stub). Every score is reconstructable from its evidence
-            ledger below.
-          </p>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-2">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-muted-foreground">mode</span>
-              <ModeSelector mode={mode} onChange={onModeChange} />
-            </div>
-            {mode === "llm" && <ModelPicker model={model} onChange={setModel} />}
-            <CategorySelector value={targetCategory} onChange={onTargetCategoryChange} />
+      {/* Controls bar — re-run/switch without leaving the tab */}
+      <Card>
+        <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
+          <span className="text-xs text-muted-foreground">{v2.counts.scored} scored · {v2.counts.fired} fired</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">mode</span>
+            <ModeSelector mode={mode} onChange={onModeChange} />
           </div>
-        </CardHeader>
+          {mode === "llm" && <ModelPicker model={model} onChange={setModel} />}
+          <CategorySelector value={targetCategory} onChange={onTargetCategoryChange} />
+        </CardContent>
       </Card>
 
-      {mode === "llm" && <NarrativePanel narrating={narrating} narration={narration} model={model} />}
+      {/* LAYER 1 — Verdict (5-second glance) */}
+      <VerdictHero v2={v2} sizing={sizing} lead={lead} />
+      {sizing?.applies_to_intent && sizing.current && <SizingPanel sizing={sizing} />}
 
-      <div className="space-y-3">
-        {scored.map((r) => (
-          <ScoredCard key={r.id} r={r} focused={!!targetCategory && r.id === targetCategory} />
-        ))}
-      </div>
+      {/* LAYER 2 — Reasoning (30-second story) */}
+      <ReasoningLayer v2={v2} sizing={sizing} mode={mode} narration={narration} narrating={narrating} model={model} />
 
-      {pending.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Awaiting input
-          </div>
-          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-            {pending.map((r) => (
-              <PlaceholderCard key={r.id} r={r} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {stubs.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Declared (not yet deep)
-          </div>
-          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-            {stubs.map((r) => (
-              <PlaceholderCard key={r.id} r={r} />
-            ))}
-          </div>
-        </div>
-      )}
+      {/* LAYER 3 — Evidence (full detail, on demand) */}
+      <EvidenceLayer fired={fired} clear={clear} awaiting={awaiting} declared={declared} focusId={targetCategory} />
     </div>
   );
 }

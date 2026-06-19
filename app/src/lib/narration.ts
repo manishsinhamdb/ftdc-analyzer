@@ -38,8 +38,11 @@ const SYSTEM_PROMPT = [
   "   downgraded or what it depends on).",
   "5. If a category needs an input that is not available, say it is unconfirmed and name the",
   "   missing source; do not guess what it would show.",
-  "Write concise prose (short executive summary, then the key findings in priority order).",
-  "Plain sentence case, no invented precision.",
+  "Structure the narrative under exactly these three headings (use them verbatim):",
+  "  'What we found' — the fired findings + the key numbers.",
+  "  'Why it points here (not elsewhere)' — the dominant constraint vs the categories with headroom.",
+  "  'What would change this conclusion' — the conditioning caveats / missing inputs.",
+  "Keep each section to a few concise sentences. Plain sentence case, no invented precision.",
 ].join("\n");
 
 function pct(x: number | null): string {

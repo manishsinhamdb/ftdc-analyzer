@@ -422,6 +422,21 @@ export const GRANULARITIES: Granularity[] = [
 ];
 export const DEFAULT_GRANULARITY = 200;
 
+// Human-friendly approximate bucket duration for a range span ÷ target buckets.
+// Snaps to a sensible ladder (1m/5m/10m/30m/1h/2h/6h/12h/1d) so the granularity
+// control reads as a real resolution (e.g. "~12m") rather than "Medium".
+const _DUR_LADDER = [60, 300, 600, 1800, 3600, 7200, 21600, 43200, 86400]; // seconds
+export function humanBucketDuration(spanMs: number, buckets: number): string {
+  if (!(spanMs > 0) || !(buckets > 0)) return "—";
+  const secPerBucket = spanMs / 1000 / buckets;
+  const nearest = _DUR_LADDER.reduce((a, b) =>
+    Math.abs(b - secPerBucket) < Math.abs(a - secPerBucket) ? b : a,
+  );
+  if (nearest < 3600) return `~${Math.round(nearest / 60)}m`;
+  if (nearest < 86400) return `~${Math.round(nearest / 3600)}h`;
+  return `~${Math.round(nearest / 86400)}d`;
+}
+
 /** Re-aggregate the engine's fine buckets to `targetBuckets` equal-time display buckets
  *  within [range]. Plots ALL data in the range (never decimation): mean = weighted mean
  *  of fine means, band = [min of mins, max of maxs] so spikes survive at any granularity.
