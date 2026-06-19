@@ -34,6 +34,7 @@ jobs:
         run: |
           pyinstaller --onefile --name ftdc-engine \
             --collect-all bson --collect-all numpy --collect-all pymongo \
+            --add-data "ftdc_analyzer/tier_tables:ftdc_analyzer/tier_tables" \
             --paths . ftdc_engine_entry.py
           mkdir -p app/src-tauri/binaries
           TRIPLE=$(rustc -vV | sed -n 's/host: //p')

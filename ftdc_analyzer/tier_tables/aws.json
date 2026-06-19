@@ -1,0 +1,19 @@
+{
+  "cloud": "aws",
+  "specs_as_of": "2026-06-19",
+  "source_note": "Seeded from MongoDB Atlas cluster-tier documentation (AWS). vCPU/RAM per node; storage via the documented disk:RAM ratio (60:1 for M10-M40, 120:1 above M40); default IOPS modeled as gp3 (~3 IOPS/GB, floor 3000, cap 16000); provisioned IOPS AWS-only on M30+; low-CPU 'R' tiers = half the vCPUs of the General tier at the same RAM; WiredTiger cache = 25% RAM (<=M30) / 50% RAM (>=M40). Verify against current Atlas docs before relying on exact numbers.",
+  "tiers": [
+    {"name": "M10", "vcpu": 2,  "ram_gb": 2,   "default_storage_gb": 120,   "default_iops": 3000,  "disk_ram_ratio": 60,  "provisioned_iops": false, "low_cpu_available": false, "low_cpu_vcpu": null, "wt_cache_gb": 0.5,  "wt_cache_pct": 25},
+    {"name": "M20", "vcpu": 2,  "ram_gb": 4,   "default_storage_gb": 240,   "default_iops": 3000,  "disk_ram_ratio": 60,  "provisioned_iops": false, "low_cpu_available": false, "low_cpu_vcpu": null, "wt_cache_gb": 1.0,  "wt_cache_pct": 25},
+    {"name": "M30", "vcpu": 2,  "ram_gb": 8,   "default_storage_gb": 480,   "default_iops": 3000,  "disk_ram_ratio": 60,  "provisioned_iops": true,  "low_cpu_available": false, "low_cpu_vcpu": null, "wt_cache_gb": 2.0,  "wt_cache_pct": 25},
+    {"name": "M40", "vcpu": 4,  "ram_gb": 16,  "default_storage_gb": 960,   "default_iops": 3000,  "disk_ram_ratio": 60,  "provisioned_iops": true,  "low_cpu_available": true,  "low_cpu_vcpu": 2,    "wt_cache_gb": 8.0,  "wt_cache_pct": 50},
+    {"name": "M50", "vcpu": 8,  "ram_gb": 32,  "default_storage_gb": 3840,  "default_iops": 11520, "disk_ram_ratio": 120, "provisioned_iops": true,  "low_cpu_available": true,  "low_cpu_vcpu": 4,    "wt_cache_gb": 16.0, "wt_cache_pct": 50},
+    {"name": "M60", "vcpu": 16, "ram_gb": 64,  "default_storage_gb": 7680,  "default_iops": 16000, "disk_ram_ratio": 120, "provisioned_iops": true,  "low_cpu_available": true,  "low_cpu_vcpu": 8,    "wt_cache_gb": 32.0, "wt_cache_pct": 50},
+    {"name": "M80", "vcpu": 32, "ram_gb": 128, "default_storage_gb": 15360, "default_iops": 16000, "disk_ram_ratio": 120, "provisioned_iops": true,  "low_cpu_available": true,  "low_cpu_vcpu": 16,   "wt_cache_gb": 64.0, "wt_cache_pct": 50},
+    {"name": "M140","vcpu": 48, "ram_gb": 192, "default_storage_gb": 23040, "default_iops": 16000, "disk_ram_ratio": 120, "provisioned_iops": true,  "low_cpu_available": true,  "low_cpu_vcpu": 24,   "wt_cache_gb": 96.0, "wt_cache_pct": 50},
+    {"name": "M200","vcpu": 64, "ram_gb": 256, "default_storage_gb": 30720, "default_iops": 16000, "disk_ram_ratio": 120, "provisioned_iops": true,  "low_cpu_available": true,  "low_cpu_vcpu": 32,   "wt_cache_gb": 128.0,"wt_cache_pct": 50},
+    {"name": "M300","vcpu": 96, "ram_gb": 384, "default_storage_gb": 46080, "default_iops": 16000, "disk_ram_ratio": 120, "provisioned_iops": true,  "low_cpu_available": true,  "low_cpu_vcpu": 48,   "wt_cache_gb": 192.0,"wt_cache_pct": 50},
+    {"name": "M400","vcpu": 96, "ram_gb": 488, "default_storage_gb": 58560, "default_iops": 16000, "disk_ram_ratio": 120, "provisioned_iops": true,  "low_cpu_available": true,  "low_cpu_vcpu": 48,   "wt_cache_gb": 244.0,"wt_cache_pct": 50},
+    {"name": "M700","vcpu": 96, "ram_gb": 768, "default_storage_gb": 92160, "default_iops": 16000, "disk_ram_ratio": 120, "provisioned_iops": true,  "low_cpu_available": true,  "low_cpu_vcpu": 48,   "wt_cache_gb": 384.0,"wt_cache_pct": 50}
+  ]
+}

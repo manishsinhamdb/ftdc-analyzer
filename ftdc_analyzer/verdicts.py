@@ -15,6 +15,10 @@ import numpy as np
 from ftdc_analyzer import metrics
 from ftdc_analyzer import decoder
 from ftdc_analyzer import signatures
+from ftdc_analyzer import scorer as _scorer
+from ftdc_analyzer import sizing as _sizing
+from ftdc_analyzer.ruleset import build_ruleset as _build_ruleset
+from ftdc_analyzer.ruleset.overrides import load_overrides as _load_overrides
 
 # ---------------------------------------------------------------------------
 # Units + summary stats
@@ -659,12 +663,18 @@ def build_insights(sig_stats):
     return out
 
 
-def downsample(ts_aligned, arr, agg):
-    """Bucket the timeline into <=2500 equal-time buckets; aggregate per bucket."""
+def downsample(ts_aligned, arr):
+    """Bucket the timeline into <=MAX_POINTS equal-time *fine* buckets; per bucket emit
+    mean (the line), min and max (the band) computed from the RAW samples in the bucket.
+
+    These are fine buckets the client re-aggregates to the chosen range+granularity
+    (mean = weighted mean of means; min = min of mins; max = max of maxs — exact), so any
+    range/granularity shows correct mean+min/max without dropping samples. A short spike
+    survives because the fine bucket's max captures it and propagates up (max of maxs)."""
     t = ts_aligned.astype(np.float64)
     n = len(t)
     if n == 0 or arr is None:
-        return [], []
+        return [], [], [], []
     nb = min(MAX_POINTS, n)
     t0, t1 = t[0], t[-1]
     span = t1 - t0
@@ -678,14 +688,16 @@ def downsample(ts_aligned, arr, agg):
     bounds = np.nonzero(np.diff(idx))[0] + 1
     seg_arrs = np.split(arr, bounds)
     seg_ids = idx[np.concatenate(([0], bounds))]
-    out_t, out_v = [], []
+    out_t, out_mean, out_min, out_max = [], [], [], []
     for b, seg in zip(seg_ids, seg_arrs):
-        if not np.any(np.isfinite(seg)):
+        finite = seg[np.isfinite(seg)]
+        if finite.size == 0:
             continue
-        val = np.nanmax(seg) if agg == "max" else np.nanmean(seg)
         out_t.append(int(round(t0 + b * bw)))
-        out_v.append(round(float(val), 3))
-    return out_t, out_v
+        out_mean.append(round(float(np.mean(finite)), 3))
+        out_min.append(round(float(np.min(finite)), 3))
+        out_max.append(round(float(np.max(finite)), 3))
+    return out_t, out_mean, out_min, out_max
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +842,10 @@ def build_facts(meta_doc, wt_cache_bytes=None, uptime_seconds=None):
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
-def build_results(dirpath, on_skip=None):
+def build_results(dirpath, on_skip=None, target_category=None,
+                  ruleset_overrides_path=None, intent=None,
+                  provided_healthcheck=None, provided_profiler=None,
+                  cloud="aws"):
     ex = metrics.extract(dirpath, on_skip=on_skip)
     sig, n = metrics.derive(ex)
     ts = ex["ts"]
@@ -897,9 +912,14 @@ def build_results(dirpath, on_skip=None):
     for key in _catalog_series_keys():
         src = SERIES_SOURCE.get(key, key)
         arr = sig.get(src)
-        agg = "mean" if key in MEAN_SET else "max"
-        tt, vv = downsample(ts_aligned, arr, agg) if arr is not None else ([], [])
-        series_block[key] = {"t": tt, "v": vv}
+        # Fine buckets: v=mean (line) for every signal + min/max (band). The client
+        # re-aggregates these to the chosen range+granularity (Atlas model). `v` stays
+        # the mean for back-compat (report.py / sparklines read .v).
+        if arr is not None:
+            tt, vmean, vmin, vmax = downsample(ts_aligned, arr)
+        else:
+            tt, vmean, vmin, vmax = [], [], [], []
+        series_block[key] = {"t": tt, "v": vmean, "min": vmin, "max": vmax}
 
     # chart_catalog resolves each chart's data_state:
     #   present            -> keep only series with data; drop the chart if none
@@ -948,6 +968,36 @@ def build_results(dirpath, on_skip=None):
     cost_optimization = build_cost_optimization(verdicts)
     assessment = signatures.build_assessment(sig_stats, insights, cost_optimization)
 
+    # --- Layer-2 deterministic scorer (assessment_v2) ---
+    # Defaults merged with operator overrides (CLI path arg or FTDC_RULESET_OVERRIDES env).
+    overrides_path = ruleset_overrides_path or os.environ.get("FTDC_RULESET_OVERRIDES")
+    ruleset = _build_ruleset(overrides_path)
+    # Only FTDC is scored today; healthcheck/profiler categories return requires_input,
+    # or input_provided when the user supplied a file (parsing is a later update).
+    available_inputs = {"ftdc"}
+    provided_inputs = set()
+    if provided_healthcheck:
+        provided_inputs.add("healthcheck")
+    if provided_profiler:
+        provided_inputs.add("profiler")
+    assessment_v2 = _scorer.score(sig_stats, available_inputs, ruleset,
+                                  target_category=target_category, intent=intent,
+                                  provided_inputs=provided_inputs)
+    # Record supplied file paths for the future healthcheck/profiler parser.
+    assessment_v2["provided_paths"] = {
+        k: v for k, v in (("healthcheck", provided_healthcheck),
+                          ("profiler", provided_profiler)) if v
+    }
+
+    # --- Sizing Recommendation (capacity → Atlas tiers; surfaced for sizing/cost intents) ---
+    _tier_tables = _sizing.load_tier_tables(_load_overrides(overrides_path))
+    sizing_recommendation = _sizing.build_sizing_recommendation(
+        meta.get("numCores"), meta.get("memSizeMB"), sig_stats,
+        assessment_v2["ranked"], cloud, _tier_tables, provided_inputs, intent)
+    assessment_v2["overrides_applied"] = bool(overrides_path and
+                                              os.path.exists(overrides_path)) \
+        if overrides_path else False
+
     results = {
         "schema_version": 3,
         "generated_at": now.isoformat(),
@@ -961,6 +1011,8 @@ def build_results(dirpath, on_skip=None):
                     "span_seconds": span_seconds, "samples": n},
         "signals": signals_block,
         "assessment": assessment,
+        "assessment_v2": assessment_v2,
+        "sizing_recommendation": sizing_recommendation,
         "verdicts": verdicts,
         "cost_optimization": cost_optimization,
         "insights": insights,

@@ -88,7 +88,7 @@ def main(argv=None):
         prog="ftdc-engine",
         description="Analyze a MongoDB diagnostic.data capture and emit results JSON.",
     )
-    parser.add_argument("input_path", metavar="INPUT_PATH",
+    parser.add_argument("input_path", metavar="INPUT_PATH", nargs="?", default=None,
                         help="path to a diagnostic.data dir or a folder containing host dirs")
     parser.add_argument("--out", metavar="FILE", default=None,
                         help="write results JSON to FILE (default: <chosen_parent>/ftdc_results.json)")
@@ -96,13 +96,68 @@ def main(argv=None):
                         help="write results JSON to stdout instead of a file")
     parser.add_argument("--out-dir", metavar="DIR", default=None,
                         help="write DIR/results.json + DIR/metrics_full.json (desktop-app mode)")
+    parser.add_argument("--ruleset-overrides", metavar="FILE", default=None,
+                        help="path to a ruleset overrides JSON merged over the defaults")
+    parser.add_argument("--target-category", metavar="ID", default=None,
+                        help="targeted mode: deep-focus one scoring category by id")
+    parser.add_argument("--intent", metavar="ID", default=None,
+                        help="assessment intent id — a curated lens over the categories")
+    parser.add_argument("--healthcheck", metavar="FILE", default=None,
+                        help="path to a healthcheck snapshot (intake only; parsing is future)")
+    parser.add_argument("--profiler", metavar="FILE", default=None,
+                        help="path to a profiler / slow-query log (intake only; parsing is future)")
+    parser.add_argument("--cloud", metavar="NAME", default="aws",
+                        choices=["aws", "gcp", "azure"],
+                        help="cloud provider for the sizing tier table (default aws)")
+    parser.add_argument("--dump-ruleset", action="store_true",
+                        help="print the merged ruleset JSON (defaults+overrides) and exit")
+    parser.add_argument("--resize-from", metavar="RESULTS_JSON", default=None,
+                        help="recompute sizing_recommendation from a cached results.json "
+                             "(for a new --cloud/--intent) without re-decoding; prints JSON")
     args = parser.parse_args(argv)
+
+    # Recompute sizing only, from a cached results.json (no FTDC decode).
+    if args.resize_from:
+        from ftdc_analyzer import sizing
+        from ftdc_analyzer.ruleset.overrides import load_overrides
+        ov_path = args.ruleset_overrides or os.environ.get("FTDC_RULESET_OVERRIDES")
+        try:
+            with open(os.path.abspath(os.path.expanduser(args.resize_from))) as fh:
+                res = json.load(fh)
+        except (OSError, ValueError) as e:
+            print(f"error: cannot read results: {e}", file=sys.stderr)
+            return 2
+        tables = sizing.load_tier_tables(load_overrides(ov_path))
+        host = res.get("host", {}) or {}
+        a2 = res.get("assessment_v2", {}) or {}
+        out = sizing.build_sizing_recommendation(
+            host.get("num_cores"), host.get("mem_mb"), res.get("signals", {}) or {},
+            a2.get("ranked", []), args.cloud, tables,
+            set(a2.get("provided_inputs", [])), args.intent)
+        sys.stdout.write(json.dumps(out))
+        sys.stdout.write("\n")
+        return 0
+
+    # Source-of-truth ruleset dump for the Methodology/Manage panel (no data needed).
+    if args.dump_ruleset:
+        from ftdc_analyzer.ruleset import build_ruleset
+        from ftdc_analyzer.ruleset.overrides import load_overrides
+        from ftdc_analyzer import sizing
+        ov_path = args.ruleset_overrides or os.environ.get("FTDC_RULESET_OVERRIDES")
+        rs = build_ruleset(ov_path)
+        dump = rs.to_dict()
+        dump["tier_tables"] = sizing.load_tier_tables(load_overrides(ov_path))
+        sys.stdout.write(json.dumps(dump, indent=2))
+        sys.stdout.write("\n")
+        return 0
 
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     start_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     t0 = time.monotonic()
     rl = RunLog(stamp)
     rl.add(f"start: {start_iso}")
+    if not args.input_path:
+        parser.error("INPUT_PATH is required (unless using --dump-ruleset)")
     rl.add(f"input_path: {args.input_path}")
 
     def fail(code, reason):
@@ -141,7 +196,14 @@ def main(argv=None):
 
     # ---- ANALYSIS ----
     try:
-        results = verdicts.build_results(chosen_dir, on_skip=on_skip)
+        results = verdicts.build_results(
+            chosen_dir, on_skip=on_skip,
+            target_category=args.target_category,
+            ruleset_overrides_path=args.ruleset_overrides,
+            intent=args.intent,
+            provided_healthcheck=args.healthcheck,
+            provided_profiler=args.profiler,
+            cloud=args.cloud)
         metrics_full = None
         if args.out_dir:
             metrics_full = metrics.build_metrics_full(chosen_dir, on_skip=on_skip)

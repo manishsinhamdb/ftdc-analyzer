@@ -50,6 +50,7 @@ setup: $(PYINST) app/node_modules
 sidecar: $(PYINST)
 	$(PYINST) --onefile --name ftdc-engine \
 	  --collect-all bson --collect-all numpy --collect-all pymongo \
+	  --add-data "$(CURDIR)/ftdc_analyzer/tier_tables:ftdc_analyzer/tier_tables" \
 	  --paths . --distpath dist --workpath build/pyi --specpath build \
 	  --noconfirm ftdc_engine_entry.py
 	mkdir -p app/src-tauri/binaries
