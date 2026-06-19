@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -9,6 +9,7 @@ import {
   Layers,
   Lock,
   Loader2,
+  Share2,
   Sparkles,
   Target,
   Upload,
@@ -19,15 +20,19 @@ import { Badge } from "@/components/ui/badge";
 import {
   type AssessmentV2,
   type CategoryResult,
+  type IntentDef,
   type LedgerRow,
   FAMILY_COLOR,
+  cachedRulesetDump,
+  mergeIntents,
+  relensAssessment,
   unlockMessage,
 } from "@/lib/ruleset";
 import { type LlmProvider, activeProvider, getLlmConfig } from "@/lib/llm";
 import { type NarrationResult, runNarration } from "@/lib/narration";
 import {
   type AssessmentMode,
-  CategorySelector,
+  IntentLens,
   ModeSelector,
   ModelPicker,
 } from "@/components/AssessmentControls";
@@ -217,16 +222,22 @@ function PlaceholderCard({ r }: { r: CategoryResult }) {
             <Badge variant="outline" className="text-[10px] uppercase text-muted-foreground">
               {r.family}
             </Badge>
-            <Badge
-              variant="outline"
-              className="ml-auto gap-1 text-[10px] font-normal"
-              style={isProvided ? { color: "#B392F0", borderColor: "#B392F055" } : undefined}
-            >
-              {badge.icon}
-              {badge.label}
-            </Badge>
+            {r.context_fired ? (
+              <Badge className="ml-auto gap-1 text-[10px]" style={{ backgroundColor: "#4DA6FF", color: "#0D1B2A" }}>
+                <Share2 className="size-3" /> context
+              </Badge>
+            ) : (
+              <Badge
+                variant="outline"
+                className="ml-auto gap-1 text-[10px] font-normal"
+                style={isProvided ? { color: "#B392F0", borderColor: "#B392F055" } : undefined}
+              >
+                {badge.icon}
+                {badge.label}
+              </Badge>
+            )}
           </div>
-          <p className="text-xs text-muted-foreground">{text}</p>
+          <p className="text-xs text-muted-foreground">{r.context_fired ? r.context_note : text}</p>
         </div>
       </div>
     </Card>
@@ -480,13 +491,47 @@ function EvidenceLayer({
   );
 }
 
+// The run's selected intent ids (from the merged-intent members the engine recorded), used
+// to initialize the Assessment-tab lens so it reflects what the user actually chose.
+function initialIntentIds(v2: AssessmentV2): string[] {
+  if (v2.intent_members?.length) return v2.intent_members.map((m) => m.id);
+  if (v2.intent?.id) return v2.intent.id.split("+").filter(Boolean);
+  return ["full_sweep"];
+}
+
+// Fired *context* states (e.g. the sharding single-shard caveat) — surfaced near the top,
+// not as a scored verdict.
+function ContextCallouts({ contexts }: { contexts: CategoryResult[] }) {
+  if (!contexts.length) return null;
+  return (
+    <div className="space-y-2">
+      {contexts.map((r) => (
+        <Card key={r.id} className="border-[#4DA6FF]/40 bg-[#4DA6FF]/5">
+          <CardContent className="flex items-start gap-2 py-3">
+            <Share2 className="mt-0.5 size-4 shrink-0 text-[#4DA6FF]" />
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                {r.name}
+                <Badge className="text-[10px]" style={{ backgroundColor: "#4DA6FF", color: "#0D1B2A" }}>
+                  context
+                </Badge>
+              </div>
+              <p className="text-xs leading-relaxed text-foreground/85">{r.context_note}</p>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 export function AssessmentV2Panel({
   v2,
   mode,
   onModeChange,
   targetCategory,
-  onTargetCategoryChange,
   sizing,
+  extras,
 }: {
   v2: AssessmentV2;
   mode: AssessmentMode;
@@ -494,11 +539,35 @@ export function AssessmentV2Panel({
   targetCategory: string | null;
   onTargetCategoryChange: (id: string | null) => void;
   sizing?: Sizing | null;
+  // Legacy assessment / extra content rendered BETWEEN Reasoning and Evidence so the
+  // Layer-3 Evidence stays the final block on the tab.
+  extras?: ReactNode;
 }) {
   const [provider, setProvider] = useState<LlmProvider | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [narration, setNarration] = useState<NarrationResult | null>(null);
   const [narrating, setNarrating] = useState(false);
+
+  // Intent lens (multi-select), initialized to the run's chosen intents. Changing it
+  // re-lenses the already-scored assessment in place (client-side; no re-decode).
+  const [rsIntents, setRsIntents] = useState<IntentDef[]>([]);
+  const [intentIds, setIntentIds] = useState<string[]>(() => initialIntentIds(v2));
+  useEffect(() => {
+    cachedRulesetDump().then((r) => setRsIntents(r.intents)).catch(() => {});
+  }, []);
+  // Re-initialize the lens whenever a different run is loaded.
+  useEffect(() => {
+    setIntentIds(initialIntentIds(v2));
+  }, [v2]);
+
+  const view = useMemo<AssessmentV2>(() => {
+    if (!rsIntents.length || !intentIds.length) return v2;
+    const merged = mergeIntents(rsIntents.filter((i) => intentIds.includes(i.id)));
+    if (!merged || merged.id === v2.intent?.id) return v2; // already this lens
+    const clone: AssessmentV2 = { ...v2, ranked: v2.ranked.map((r) => ({ ...r })) };
+    relensAssessment(clone, merged);
+    return clone;
+  }, [v2, rsIntents, intentIds]);
 
   useEffect(() => {
     getLlmConfig()
@@ -516,51 +585,56 @@ export function AssessmentV2Panel({
     let alive = true;
     setNarrating(true);
     setNarration(null);
-    runNarration(v2, provider, model, targetCategory, sizing)
+    runNarration(view, provider, model, targetCategory, sizing)
       .then((r) => alive && setNarration(r))
       .finally(() => alive && setNarrating(false));
     return () => {
       alive = false;
     };
-  }, [mode, model, targetCategory, provider, v2, sizing]);
+  }, [mode, model, targetCategory, provider, view, sizing]);
 
-  let scored = v2.ranked.filter((r) => r.status === "scored");
+  let scored = view.ranked.filter((r) => r.status === "scored");
   if (targetCategory) {
     const focus = scored.find((r) => r.id === targetCategory);
     if (focus) scored = [focus, ...scored.filter((r) => r.id !== targetCategory)];
   }
   const fired = scored.filter((r) => r.fired);
   const clear = scored.filter((r) => !r.fired);
-  const awaiting = v2.ranked.filter(
+  const awaiting = view.ranked.filter(
     (r) => r.status === "requires_input" || r.status === "input_provided",
   );
-  const declared = v2.ranked.filter((r) => r.status === "stub");
+  const declared = view.ranked.filter((r) => r.status === "stub");
+  const contexts = view.ranked.filter((r) => r.context_fired);
   const lensFired = fired.filter((r) => r.in_lens !== false);
   const lead = lensFired[0] ?? fired[0] ?? scored[0];
 
   return (
     <div className="space-y-4">
-      {/* Controls bar — re-run/switch without leaving the tab */}
+      {/* Controls bar — re-lens / switch mode without leaving the tab */}
       <Card>
         <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
-          <span className="text-xs text-muted-foreground">{v2.counts.scored} scored · {v2.counts.fired} fired</span>
+          <span className="text-xs text-muted-foreground">{view.counts.scored} scored · {view.counts.fired} fired</span>
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">mode</span>
             <ModeSelector mode={mode} onChange={onModeChange} />
           </div>
           {mode === "llm" && <ModelPicker model={model} onChange={setModel} />}
-          <CategorySelector value={targetCategory} onChange={onTargetCategoryChange} />
+          <IntentLens value={intentIds} onChange={setIntentIds} />
         </CardContent>
       </Card>
 
       {/* LAYER 1 — Verdict (5-second glance) */}
-      <VerdictHero v2={v2} sizing={sizing} lead={lead} />
+      <VerdictHero v2={view} sizing={sizing} lead={lead} />
+      <ContextCallouts contexts={contexts} />
       {sizing?.applies_to_intent && sizing.current && <SizingPanel sizing={sizing} />}
 
       {/* LAYER 2 — Reasoning (30-second story) */}
-      <ReasoningLayer v2={v2} sizing={sizing} mode={mode} narration={narration} narrating={narrating} model={model} />
+      <ReasoningLayer v2={view} sizing={sizing} mode={mode} narration={narration} narrating={narrating} model={model} />
 
-      {/* LAYER 3 — Evidence (full detail, on demand) */}
+      {/* Legacy assessment / extras — kept ABOVE Evidence so Layer-3 stays last. */}
+      {extras}
+
+      {/* LAYER 3 — Evidence (full detail, on demand) — the FINAL block on the tab. */}
       <EvidenceLayer fired={fired} clear={clear} awaiting={awaiting} declared={declared} focusId={targetCategory} />
     </div>
   );

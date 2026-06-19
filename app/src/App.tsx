@@ -11,6 +11,7 @@ import {
   Compass,
   Cpu,
   Database,
+  FileText,
   FolderOpen,
   Gauge,
   HardDrive,
@@ -29,6 +30,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Sun,
+  X,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -74,6 +76,7 @@ import { Landing } from "@/components/Landing";
 import { LlmSettings } from "@/components/LlmSettings";
 import { MiniGame } from "@/components/MiniGame";
 import { HealthcheckReport } from "@/components/HealthcheckReport";
+import { StructuralTiles } from "@/components/StructuralTiles";
 import { applyTheme, nextTheme, type ThemeName } from "@/lib/theme";
 import {
   DropdownMenu,
@@ -152,6 +155,10 @@ const OVERVIEW_CHART_TITLES = [
   "WiredTiger cache fill",
   "Disk utilization",
 ];
+
+// The chart catalog category whose placeholder tiles are replaced by healthcheck-derived
+// snapshot tiles (StructuralTiles) once a healthcheck is loaded.
+const STRUCTURAL_CATEGORY = "Indexes & Storage";
 
 function findChart(catalog: FtdcResults["chart_catalog"], title: string): ChartSpec | undefined {
   for (const cat of catalog) {
@@ -667,6 +674,7 @@ export default function App() {
           error={error}
           selectedPath={selectedPath}
           onPick={pickFolder}
+          onClearFtdc={() => setSelectedPath(null)}
           healthcheckPath={healthcheckPath}
           onPickHealthcheck={() =>
             pickFile("Select a healthcheck snapshot (getMongoData.js output)", setHealthcheckPath)
@@ -798,13 +806,42 @@ export default function App() {
                   title="Choose a diagnostic.data folder (or a parent of host folders) to analyze">
             <FolderOpen className="size-4" /> Open FTDC data…
           </Button>
-          <span className="max-w-[34ch] truncate font-mono text-xs text-muted-foreground"
-                title={selectedPath ?? ""}>
-            {selectedPath ?? "no folder selected"}
+          <span className="flex items-center gap-1 font-mono text-xs text-muted-foreground">
+            <span className="max-w-[28ch] truncate" title={selectedPath ?? ""}>
+              {selectedPath ?? "no folder selected"}
+            </span>
+            {selectedPath && (
+              <button onClick={() => setSelectedPath(null)} disabled={analyzing}
+                      title="Clear the selected FTDC folder"
+                      className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-destructive">
+                <X className="size-3.5" />
+              </button>
+            )}
           </span>
+          {/* Healthcheck / profiler input chips with a clear control (co-primary inputs). */}
+          {healthcheckPath && (
+            <span className="flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
+              <FileText className="size-3" /> healthcheck
+              <button onClick={() => setHealthcheckPath(null)} disabled={analyzing}
+                      title="Clear the healthcheck snapshot"
+                      className="text-muted-foreground hover:text-destructive">
+                <X className="size-3" />
+              </button>
+            </span>
+          )}
+          {profilerPath && (
+            <span className="flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
+              <FileText className="size-3" /> profiler
+              <button onClick={() => setProfilerPath(null)} disabled={analyzing}
+                      title="Clear the profiler log"
+                      className="text-muted-foreground hover:text-destructive">
+                <X className="size-3" />
+              </button>
+            </span>
+          )}
           <Button size="sm" className="h-8 gap-2 text-xs" onClick={analyze}
-                  disabled={analyzing || !selectedPath}
-                  title="Run the local engine on the selected folder (no upload)">
+                  disabled={analyzing || (!selectedPath && !healthcheckPath)}
+                  title="Run the local engine on the selected inputs (no upload)">
             {analyzing ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
             {analyzing ? "Analyzing…" : "Analyze"}
           </Button>
@@ -870,13 +907,13 @@ export default function App() {
             >
               {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
             </button>
-            {dataDir && ftdcReady && (
+            {dataDir && (
               <Button
                 size="sm"
                 variant="ghost"
                 className="h-8 text-xs"
                 disabled={analyzing}
-                title="Save the self-contained HTML report to a folder you choose"
+                title="Save the self-contained HTML report (General · Healthcheck · Charts · Assessment)"
                 onClick={exportReport}
               >
                 Export HTML
@@ -977,9 +1014,12 @@ export default function App() {
                 </div>
                 <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 bg-card p-1">
                   {data.chart_catalog.map((cat) => {
-                    const hasData = cat.charts.some(
-                      (ch) => !ch.data_state || ch.data_state === "present",
-                    );
+                    // The structural category is "unlocked" once a healthcheck is loaded —
+                    // it renders snapshot tiles instead of the upload placeholders.
+                    const structural = cat.category === STRUCTURAL_CATEGORY && hcReady;
+                    const hasData =
+                      structural ||
+                      cat.charts.some((ch) => !ch.data_state || ch.data_state === "present");
                     return (
                       <TabsTrigger
                         key={cat.category}
@@ -1007,6 +1047,9 @@ export default function App() {
 
               {data.chart_catalog.map((cat) => (
                 <TabsContent key={cat.category} value={cat.category} className="mt-4">
+                  {cat.category === STRUCTURAL_CATEGORY && hcReady && data.healthcheck ? (
+                    <StructuralTiles hc={data.healthcheck} sizing={data.sizing_recommendation} />
+                  ) : (
                   <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                     {cat.charts.map((ch) => {
                       const cls = spansTwoCols(ch) ? "xl:col-span-2" : undefined;
@@ -1024,6 +1067,7 @@ export default function App() {
                       );
                     })}
                   </div>
+                  )}
                 </TabsContent>
               ))}
             </Tabs>
@@ -1038,7 +1082,7 @@ export default function App() {
           {data && view === "inference" && (
             generateAssessment && (data.assessment_v2 || data.assessment) ? (
               <div className="space-y-4">
-                {data.assessment_v2 && (
+                {data.assessment_v2 ? (
                   <AssessmentV2Panel
                     v2={data.assessment_v2}
                     mode={assessmentMode}
@@ -1046,13 +1090,24 @@ export default function App() {
                     targetCategory={targetCategory}
                     onTargetCategoryChange={setTargetCategory}
                     sizing={data.sizing_recommendation}
+                    // Legacy signature assessment rendered BETWEEN Reasoning and Evidence so
+                    // the 3-layer Evidence stays the final block on the tab.
+                    extras={
+                      data.assessment && data.cost_optimization ? (
+                        <AssessmentPanel
+                          assessment={data.assessment}
+                          costOptimization={data.cost_optimization}
+                        />
+                      ) : null
+                    }
                   />
-                )}
-                {data.assessment && data.cost_optimization && (
-                  <AssessmentPanel
-                    assessment={data.assessment}
-                    costOptimization={data.cost_optimization}
-                  />
+                ) : (
+                  data.assessment && data.cost_optimization && (
+                    <AssessmentPanel
+                      assessment={data.assessment}
+                      costOptimization={data.cost_optimization}
+                    />
+                  )
                 )}
               </div>
             ) : (

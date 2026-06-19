@@ -73,6 +73,7 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
   const [kind, setKind] = useState<string>(ALL);
   const [selected, setSelected] = useState<string[]>([]);
   const [mode, setMode] = useState<"raw" | "rate">("rate");
+  const [normalize, setNormalize] = useState(true);
 
   const metrics = metricsFull?.metrics ?? [];
   const byPath = useMemo(() => {
@@ -116,16 +117,50 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
   const t = metricsFull?.timeline.t ?? [];
   const selectedMetrics = selected.map((p) => byPath.get(p)).filter(Boolean) as MetricFull[];
 
-  const seriesMap: Record<string, SeriesData> = {};
-  for (const m of selectedMetrics) seriesMap[m.path] = { t, v: applyMode(m, mode, t) };
-
-  // A selected metric has data only if its (mode-applied) series has any finite value.
-  const hasData = (path: string) => {
-    const sd = seriesMap[path];
-    return !!sd && sd.v.some((x) => x !== null && x !== undefined && Number.isFinite(x));
-  };
   const colorFor = (path: string) =>
     LINE_PALETTE[Math.max(0, selected.indexOf(path)) % LINE_PALETTE.length];
+
+  // Build a plot descriptor per selected metric. The Recharts dataKey / CSS-var key is a
+  // SANITIZED token (`mx0…`) — using the raw metric path (dots + spaces) produced an invalid
+  // `var(--color-…)` so lines rendered with no stroke (the empty-overlay bug).
+  type Plot = {
+    path: string;
+    key: string;
+    label: string;
+    color: string;
+    status: "empty" | "flat" | "ok";
+    absMax: number;
+    raw: (number | null)[];
+  };
+  const plots: Plot[] = selectedMetrics.map((m, i) => {
+    const raw = applyMode(m, mode, t);
+    let mn = Infinity, mx = -Infinity, n = 0, absMax = 0;
+    for (const x of raw) {
+      if (x === null || x === undefined || !Number.isFinite(x)) continue;
+      n++;
+      if (x < mn) mn = x;
+      if (x > mx) mx = x;
+      if (Math.abs(x) > absMax) absMax = Math.abs(x);
+    }
+    const status: Plot["status"] = n === 0 ? "empty" : mn === mx ? "flat" : "ok";
+    return { path: m.path, key: `mx${i}`, label: shortLabel(m.path), color: colorFor(m.path), status, absMax, raw };
+  });
+
+  // Overlaying metrics of very different magnitudes hides the small ones on a shared axis.
+  // When >1 metric is selected, normalize each to a % of its own max (toggleable); the
+  // summary-stats table below always shows the real values.
+  const normActive = normalize && plots.length > 1;
+  const seriesMap: Record<string, SeriesData> = {};
+  for (const p of plots) {
+    const v =
+      normActive && p.absMax > 0
+        ? p.raw.map((x) => (x === null || x === undefined || !Number.isFinite(x) ? null : (x / p.absMax) * 100))
+        : p.raw;
+    seriesMap[p.key] = { t, v };
+  }
+
+  const statusOf = (path: string): Plot["status"] =>
+    plots.find((p) => p.path === path)?.status ?? "empty";
 
   const spec: ChartSpec = {
     title:
@@ -133,9 +168,9 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
         ? "Select a metric"
         : selectedMetrics.length === 1
           ? selectedMetrics[0].path
-          : `${selectedMetrics.length} metrics overlaid`,
-    unit: mode === "rate" ? "/s" : "",
-    series: selectedMetrics.map((m) => ({ key: m.path, label: shortLabel(m.path) })),
+          : `${selectedMetrics.length} metrics overlaid${normActive ? " · normalized to each metric's max" : ""}`,
+    unit: normActive ? "%" : mode === "rate" ? "/s" : "",
+    series: plots.map((p) => ({ key: p.key, label: p.label, color: p.color })),
   };
 
   if (loading || !metricsFull) {
@@ -253,9 +288,13 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
                         )}
                         <span className="truncate font-mono">{m.path}</span>
                       </span>
-                      {on && !hasData(m.path) ? (
+                      {on && statusOf(m.path) === "empty" ? (
                         <Badge className="shrink-0 px-1 py-0 text-[9px]" style={{ backgroundColor: "#E05C4B", color: "#0D1B2A" }}>
                           no data
+                        </Badge>
+                      ) : on && statusOf(m.path) === "flat" ? (
+                        <Badge className="shrink-0 px-1 py-0 text-[9px]" style={{ backgroundColor: "#F5A623", color: "#0D1B2A" }}>
+                          flat
                         </Badge>
                       ) : (
                         <Badge
@@ -284,7 +323,7 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
           {selected.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {selected.map((p) => {
-                const nd = !hasData(p);
+                const stt = statusOf(p);
                 return (
                   <span
                     key={p}
@@ -292,9 +331,14 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
                   >
                     <span className="size-2.5 shrink-0 rounded-[2px]" style={{ background: colorFor(p) }} />
                     <span className="font-mono">{shortLabel(p)}</span>
-                    {nd && (
+                    {stt === "empty" && (
                       <span className="rounded bg-destructive/20 px-1 text-[9px] font-semibold text-destructive">
                         no data
+                      </span>
+                    )}
+                    {stt === "flat" && (
+                      <span className="rounded px-1 text-[9px] font-semibold" style={{ backgroundColor: "rgba(245,166,35,.2)", color: "#F5A623" }}>
+                        flat
                       </span>
                     )}
                     <button onClick={() => toggle(p)} title="Remove" className="text-muted-foreground hover:text-foreground">
@@ -306,7 +350,7 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-1 rounded-md border border-border bg-card p-1">
+          <div className="flex flex-wrap items-center justify-end gap-1 rounded-md border border-border bg-card p-1">
             <span className="mr-auto pl-2 text-xs text-muted-foreground">View</span>
             {(["raw", "rate"] as const).map((mo) => (
               <Button
@@ -319,6 +363,20 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
                 {mo === "raw" ? "Raw" : "Rate (/s)"}
               </Button>
             ))}
+            {selectedMetrics.length > 1 && (
+              <>
+                <span className="mx-1 h-5 w-px bg-border" />
+                <Button
+                  size="sm"
+                  variant={normalize ? "default" : "ghost"}
+                  className="h-7 px-3 text-xs"
+                  title="Scale each metric to a % of its own max so different magnitudes are comparable on one axis. Summary stats below stay in real units."
+                  onClick={() => setNormalize((n) => !n)}
+                >
+                  Normalize
+                </Button>
+              </>
+            )}
           </div>
 
           {selectedMetrics.length === 0 ? (
@@ -358,7 +416,14 @@ export function ExploreView({ metricsFull, loading, capture, master, range, setR
                   <tbody>
                     {selectedMetrics.map((m) => (
                       <tr key={m.path} className="border-t border-border">
-                        <td className="px-2 py-1 font-mono">{shortLabel(m.path)}</td>
+                        <td className="px-2 py-1 font-mono">
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="size-2.5 shrink-0 rounded-[2px]" style={{ background: colorFor(m.path) }} />
+                            {shortLabel(m.path)}
+                            {statusOf(m.path) === "empty" && <span className="text-destructive">· no data</span>}
+                            {statusOf(m.path) === "flat" && <span style={{ color: "#F5A623" }}>· flat</span>}
+                          </span>
+                        </td>
                         <td className="px-2 py-1 text-muted-foreground">{m.kind}</td>
                         {(["min", "p50", "p95", "p99", "max", "mean"] as const).map((k) => (
                           <td key={k} className="px-2 py-1 text-right font-mono">

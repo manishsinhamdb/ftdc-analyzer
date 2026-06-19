@@ -862,6 +862,40 @@ def _enrich_structural(assessment_v2, hc_parsed):
                 r["caveats"].append(cav)
 
 
+_SHARDING_CONTEXT_NOTE = (
+    "This node is one shard (shardsvr) of a sharded cluster. This analysis covers a single "
+    "shard's replica set — cluster-wide concerns (balancer activity, chunk distribution, jumbo "
+    "chunks, shard-key effectiveness, mongos routing) are not visible from this capture. Run "
+    "sh.status() on a mongos and provide it for cluster-level analysis.")
+
+
+def _apply_sharding_context(assessment_v2, hc_parsed):
+    """When the healthcheck shows this node is a shard member (clusterRole=shardsvr), surface
+    the Sharding & Topology category as a fired *context* (an honest single-shard caveat +
+    direction) rather than a scored verdict — we do NOT have cluster-wide data. configsvr /
+    standalone / absent clusterRole → no-op (behaves as before). The actual sh.status() parser
+    is a later phase; this is the caveat-now step. Additive: does not change any score."""
+    if not hc_parsed:
+        return
+    topo = (hc_parsed.get("report") or {}).get("topology") or {}
+    role = str(topo.get("cluster_role") or "").lower()
+    if "shardsvr" not in role:  # only a data shard; configsvr/standalone/none excluded
+        return
+    for r in assessment_v2.get("ranked", []):
+        if r.get("id") != "sharding_topology":
+            continue
+        r["context_fired"] = True
+        r["context_kind"] = "sharding"
+        r["context_note"] = _SHARDING_CONTEXT_NOTE
+        r["recommendation"] = (
+            "Single-shard scope: this is one shard of a sharded cluster. Provide sh.status() "
+            "from a mongos for cluster-wide sharding analysis (balancer, chunk distribution, "
+            "jumbo chunks, shard-key effectiveness).")
+        if _SHARDING_CONTEXT_NOTE not in r.get("caveats", []):
+            r.setdefault("caveats", []).append(_SHARDING_CONTEXT_NOTE)
+        break
+
+
 def _assemble_assessment(sig_stats, ruleset, available_inputs, provided_inputs,
                          target_category, intent, hc_parsed,
                          provided_healthcheck, provided_profiler):
@@ -872,6 +906,7 @@ def _assemble_assessment(sig_stats, ruleset, available_inputs, provided_inputs,
                                   provided_inputs=provided_inputs)
     if hc_parsed:
         _enrich_structural(assessment_v2, hc_parsed)
+        _apply_sharding_context(assessment_v2, hc_parsed)
     assessment_v2["provided_paths"] = {
         k: v for k, v in (("healthcheck", provided_healthcheck),
                           ("profiler", provided_profiler)) if v

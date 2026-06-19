@@ -140,6 +140,15 @@ export interface CategoryResult {
   in_lens?: boolean;
   lean?: number;
   provided_inputs?: string[];
+  // Healthcheck-derived dynamic evidence merged post-scoring (Structural-Design categories).
+  healthcheck_evidence?: {
+    drop_list?: { index: string; size_mb: number }[];
+    [k: string]: unknown;
+  } | null;
+  // A fired *context* state (e.g. sharding single-shard caveat) — surfaced, not scored.
+  context_fired?: boolean;
+  context_kind?: string;
+  context_note?: string;
 }
 
 export interface AssessmentV2 {

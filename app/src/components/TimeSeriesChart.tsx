@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Lock, Maximize2, RotateCcw, Upload } from "lucide-react";
+import { Info, Lock, Maximize2, RotateCcw, Upload } from "lucide-react";
 import {
   Area,
   CartesianGrid,
@@ -53,6 +53,25 @@ import {
 export type { ChartSeriesEntry as LineSpec } from "@/lib/ftdc";
 
 const MODAL_BUCKETS = 800; // detail resolution inside the maximized modal
+
+// Explains the mean line + min–max band (recurring point of confusion). The band math
+// is unchanged — this is purely an affordance.
+const BAND_EXPLAINER =
+  "Line = bucket mean. Shaded band = min–max of the samples in each bucket — a tall band " +
+  "over a low line means brief spikes the average hides.";
+
+function BandInfo() {
+  return (
+    <span
+      tabIndex={0}
+      title={BAND_EXPLAINER}
+      aria-label={BAND_EXPLAINER}
+      className="shrink-0 cursor-help rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-secondary/50 hover:text-foreground"
+    >
+      <Info className="size-3.5" />
+    </span>
+  );
+}
 
 interface Props {
   spec: ChartSpec;
@@ -191,7 +210,7 @@ function ChartBody({ config, data, presentLines, range, unit, className, zoom }:
 function chartConfig(presentLines: ChartSpec["series"]): ChartConfig {
   const config: ChartConfig = {};
   presentLines.forEach((l, i) => {
-    config[l.key] = { label: l.label, color: LINE_PALETTE[i % LINE_PALETTE.length] };
+    config[l.key] = { label: l.label, color: l.color ?? LINE_PALETTE[i % LINE_PALETTE.length] };
   });
   return config;
 }
@@ -308,14 +327,17 @@ export function TimeSeriesChart({ spec, series, range, granularity, description,
               {description && <CardDescription className="text-xs">{description}</CardDescription>}
             </div>
             {hasData && (
-              <button
-                onClick={() => setMaximized(true)}
-                title="Maximize chart (drag to zoom)"
-                aria-label="Maximize chart"
-                className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
-              >
-                <Maximize2 className="size-4" />
-              </button>
+              <div className="flex shrink-0 items-center gap-0.5">
+                <BandInfo />
+                <button
+                  onClick={() => setMaximized(true)}
+                  title="Maximize chart (drag to zoom)"
+                  aria-label="Maximize chart"
+                  className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+                >
+                  <Maximize2 className="size-4" />
+                </button>
+              </div>
             )}
           </div>
         </CardHeader>

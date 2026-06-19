@@ -35,6 +35,7 @@ interface Props {
   error: string | null;
   selectedPath: string | null;
   onPick: () => void;
+  onClearFtdc: () => void;
   healthcheckPath: string | null;
   onPickHealthcheck: () => void;
   onClearHealthcheck: () => void;
@@ -200,6 +201,7 @@ export function Landing(props: Props) {
     error,
     selectedPath,
     onPick,
+    onClearFtdc,
     healthcheckPath,
     onPickHealthcheck,
     onClearHealthcheck,
@@ -435,6 +437,7 @@ export function Landing(props: Props) {
                     path={selectedPath}
                     unlocks="Time-series: capacity / incident analysis, charts, signals."
                     onPick={onPick}
+                    onClear={onClearFtdc}
                   />
                   <InputSlot
                     icon={<FileText className="size-4" />}

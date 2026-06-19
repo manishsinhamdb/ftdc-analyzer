@@ -773,3 +773,194 @@ App: App.tsx (healthcheck view, co-primary flow, theme toggle, nullable-field gu
 (co-primary inputs), preflight (input-aware classifyRun), ftdc.ts/sizing.ts types, index.css
 (light theme), main.tsx (theme apply). Rust lib.rs (`analyze_path` path Optional). Left
 **staged, uncommitted** (no commit/tag/push). GUI click-through is the one remaining manual step.
+
+---
+
+# Phase 8 — Final fixes (structural tiles · Explore · Export HTML · clear-input · band explainer)
+
+Five targeted gap-fixes after Phase 7. ADDITIVE; FTDC decoder + scorer logic untouched.
+Validated on the Ludo FTDC dir + `files/upload/healthcheck/output_ludo.json`.
+
+## A25. Explore root cause — metric paths are invalid CSS-variable names
+The shadcn chart sets a `--color-<key>` custom property per series and the line reads
+`stroke: var(--color-<key>)`. Catalog charts use simple keys (`cpu_util_pct`) so they render;
+**Explore used the full metric PATH as the key** (e.g. `serverStatus.wiredTiger.cache.bytes
+currently in the cache`) — dots + spaces make `--color-…` an INVALID declaration, so the
+variable is never set and the line stroke resolves to nothing → axes/band render but the series
+is invisible (exactly the screenshot). Fix: Explore now maps each selected metric to a
+SANITIZED key (`mx0…`) and passes an explicit `color` per series (new optional `color` on
+`ChartSeriesEntry`, honored in `chartConfig`), so chip / line / summary-swatch stay in lockstep.
+
+## (a) Structural chart tiles — facts each tile uses (`StructuralTiles.tsx`)
+Charts → "Indexes & Storage" renders 5 snapshot tiles from `results.healthcheck` (bars/gauges,
+NOT band line charts) once a healthcheck is loaded; without one the existing "needs data —
+upload healthcheck" placeholders remain.
+- **Index usage & unused indexes** — `index_analysis.top_accessed` (bar per index by ops) +
+  `drop_list` (unused set: size, 0 accesses; `_id_` already excluded) + reclaimable-GB badge.
+- **Per-collection storage size** — `collections[]` `storage_size` vs `data_size` (bar = on-disk
+  share of logical → compression visible) + per-collection compression ratio.
+- **Cache fit** — `sizing_recommendation.cache_fit` (data÷cache ratio, fits?/disk-served, WT
+  cache fill %, WT-cache/in-cache/logical-data) with a server-block fallback.
+- **Oplog window** — `replication.time_diff_hours` (hero h) + `used_pct` bar + log size; flags
+  < 24 h as tight.
+- **Collection fragmentation (proxy)** — per-collection `storage_size ÷ data_size`, explicitly
+  labelled a proxy (freeStorageSize is not in the snapshot); outliers > 0.9 flagged red.
+
+## (b) Explore plotting — root cause + fix
+Root cause in A25. Beyond the key fix: overlaying metrics of very different magnitudes on a
+shared axis hid the small ones, so a **Normalize** toggle (default on for >1 metric) scales each
+series to a % of its own max (axis → "%"; the summary-stats table always shows real units). Each
+selected metric is classified **ok / flat / empty**: empty → red "no data" badge, a constant /
+all-zero series → amber "flat" badge (chip + left-list + summary row), so a zero/flat metric no
+longer reads as a silent blank line. Colour coding is unified (`colorFor(path)` drives the chip
+swatch, the line, and a new summary-row swatch).
+
+## (c) Export HTML — 4-section structure (`report.py`)
+`render_html` reworked into four ordered sections, self-contained + printable, null-safe:
+1. **General cluster information** — host/role/version/**edition**/cores/RAM/disk + capture
+   window (FTDC) + **topology with arbiter detection** (data-bearing + arbiter + electable counts,
+   replset, cluster role, oplog window) + uptime, pulled from the healthcheck when present.
+2. **Healthcheck Report** — all 6 sub-areas (Summary / Collections / Index Analyzer / Operations /
+   WiredTiger / Health & Security). **Omitted entirely when no healthcheck** (returns "").
+3. **Charts / Metrics** — the FTDC time-series chart panels (Plotly, as before) **plus** the
+   populated structural snapshot tiles + the signal-summary table.
+4. **Assessment** — `assessment_v2` 3-layer: verdict hero (top fired category) + **Sizing
+   Recommendation cards** (current + 3 options, recommended highlighted) + per-category cards
+   grouped Fired / Clear / Awaiting input / Declared, each with a confidence bar, the dynamic
+   recommendation, healthcheck drop-list evidence, caveats, and the **evidence ledger table**;
+   then the FTDC capacity verdict cards + cost optimization.
+   **FTDC-only vs both:** has_ftdc = `bool(results.series)` gates the Plotly charts + signal table
+   + capacity verdict cards; the healthcheck section + structural tiles gate on
+   `results.healthcheck`. Verified: a both-inputs render has all 4 sections (real content:
+   ludo_prod / 2.51 GB / arbiter / 25.71 h / M60 / "Drop 13"); an FTDC-only render cleanly omits
+   section 2 AND the structural tiles; an HC-only render has General + Healthcheck + tiles +
+   Assessment and no FTDC charts. The HC-only CLI branch now also writes `report.html`, and the
+   app's Export HTML is enabled for any loaded run (not just FTDC).
+
+## (d) Clear-input behavior
+`InputSlot` already cleared healthcheck/profiler; the **FTDC slot now takes an `onClear`**
+(`onClearFtdc`) so a chosen folder can be unselected. The in-app source bar gained a ✕ on the
+FTDC path plus removable **healthcheck / profiler chips**; clearing re-evaluates the co-primary
+Run gate (Analyze stays enabled while either input remains; disabled only when both are gone).
+
+## (e) Band explainer
+A small `Info` affordance (hover/focus `title`) on every time-series chart header: "Line = bucket
+mean. Shaded band = min–max of the samples in each bucket — a tall band over a low line means
+brief spikes the average hides." Band MATH unchanged.
+
+## (f) Build result
+`make app` → **EXIT 0** (sidecar rebuilt, vite ✓, cargo ✓, `tsc --noEmit` ✓; `py_compile`
+report/cli/verdicts/healthcheck ✓). Bundles:
+- `app/src-tauri/target/release/bundle/macos/FTDC Analyzer.app` — 36 MB
+- `app/src-tauri/target/release/bundle/dmg/FTDC Analyzer_0.1.0_aarch64.dmg` — 26 MB
+**Bundled** sidecar verified end-to-end:
+- HC-only run writes `report.html` (113 KB) with Healthcheck Report + structural tiles +
+  Assessment (no FTDC charts) — and real content (ludo_prod / 2.51 / arbiter).
+- FTDC+HC run writes `report.html` (8.0 MB) with ALL four sections together: General header,
+  Healthcheck Report, FTDC Plotly charts (`cat_*`) + structural tiles, Assessment + Sizing
+  Recommendation + Capacity verdicts + evidence-ledger tables. data_sources {ftdc, healthcheck}.
+Files: new `app/src/components/StructuralTiles.tsx`; modified `report.py` (4-section render +
+tiles + assessment_v2 + general/topology), `cli.py` (HC-only report.html), `TimeSeriesChart.tsx`
+(band Info + per-series `color`), `ExploreView.tsx` (sanitized keys + normalize + flat/empty
+status + summary swatch), `ftdc.ts` (ChartSeriesEntry.color), `App.tsx` (StructuralTiles wiring,
+clear-input chips, Export gate), `Landing.tsx` (FTDC onClear). Left **staged, uncommitted**
+(no commit/tag/push). GUI click-through remains the one manual step (no headless GUI here).
+
+---
+
+# Phase 8 — round 2 (focus multi-select · sharding caveat · Evidence-last · export tile parity · self-UAT)
+
+Five follow-ups; lands together with the staged Phase 8 work. ADDITIVE; FTDC decoder + scorer
+CORE logic untouched (sharding is a post-score annotation, not a scoring change). Validated on
+the Ludo FTDC dir + `files/upload/healthcheck/output_ludo.json`.
+
+## A26. Self-UAT is part of "done" (new standing practice)
+Before reporting done I now programmatically verify the ARTIFACTS a user sees, not just
+"compiles + engine data exists". For this round: a reusable export self-UAT (`/tmp/uat/uat_export.py`)
+renders `report.html` for FTDC-only / HC-only / both and asserts section presence/absence, the
+4-section order, every structural tile non-empty, Assessment = verdict+sizing+ledgers+(shardsvr)
+caveat, and Layer-3-last; plus an assessment-JSON UAT asserting intent reflects the selected
+intents and sharding fires on shardsvr. (GUI rendering still needs human eyes — flagged.)
+
+## (a) Assessment focus → intent multi-select defaulted to the run's intents
+The Assessment-tab control was a single-select category "focus" defaulting to "Full sweep".
+Replaced with `IntentLens` (AssessmentControls) — a compact multi-select with the wizard's
+union semantics ("Full sweep" exclusive). `AssessmentV2Panel` initializes it from the run's
+chosen intents (`assessment_v2.intent_members`, fallback `intent.id.split('+')`), and changing
+it re-lenses IN PLACE via the existing `mergeIntents` + `relensAssessment` (a cloned view; no
+re-decode, confidences/ledgers unchanged). Verified (assessment JSON UAT): a `right_sizing,
+cost_optimization` run yields `intent_members=[right_sizing,cost_optimization]` and the lens
+initializes with both selected (NOT full_sweep).
+
+## (b) Sharding context caveat when shardsvr (trigger · copy · surfaces)
+Trigger: healthcheck `topology.cluster_role` contains `shardsvr` (configsvr / standalone /
+absent → no-op, behaves as before). Engine `verdicts._apply_sharding_context` (called in the
+shared `_assemble_assessment`, so both FTDC and HC-only paths) annotates the `sharding_topology`
+ranked entry with `context_fired=true`, `context_kind="sharding"`, a `context_note`, and a
+`sh.status()` direction — it does NOT score it (counts.fired unchanged; we lack cluster-wide
+data). Copy: "This node is one shard (shardsvr) of a sharded cluster. This analysis covers a
+single shard's replica set — cluster-wide concerns (balancer activity, chunk distribution, jumbo
+chunks, shard-key effectiveness, mongos routing) are not visible from this capture. Run
+sh.status() on a mongos and provide it for cluster-level analysis." Surfaces: app — a blue
+"context" callout under the Verdict hero (`ContextCallouts`) + a context badge/note on the
+Sharding card in Evidence; export — `_context_callouts_html` after the hero in the Assessment
+section. (The sh.status() parser itself is Phase 9.)
+
+## (c) Layer-3 Evidence ordered LAST (app + export)
+App: the legacy signature `AssessmentPanel` rendered AFTER the v2 panel (so Evidence was
+mid-page). It's now passed as an `extras` slot rendered BETWEEN Reasoning and Evidence, so the
+3-layer order is strictly Verdict → Reasoning → (extras) → Evidence (final). Export: split the
+monolithic assessment HTML into `_assessment_top_html` (Verdict hero + context + sizing +
+Layer-2 Reasoning) and `_assessment_evidence_html` (per-category ledgers), with the FTDC
+capacity verdicts + cost in between, so Evidence is the last block of the Assessment section.
+Added a deterministic `_reasoning_html` (What we found / Why here / What would change it),
+mirroring the in-app grounded reasoning, so the export's layer order matches the tab.
+
+## (d) Export structural-tile parity — root cause + fix
+Root cause: the export rendered TWO "Indexes & Storage" panels — the FTDC chart-catalog
+category (5 `requires_input` placeholder charts = the "blank tile(s)") AND the populated
+structural snapshot-tiles panel. The live Charts tab REPLACES the category with the tiles; the
+export added the tiles but kept the blank catalog panel. Fix: in `render_html`, when a
+healthcheck is present, drop the catalog "Indexes & Storage" category from `chart_config`
+(both the rendered charts and the embedded `ftdc-charts` JSON), mirroring the live tab — leaving
+exactly one populated panel. Without a healthcheck the placeholder catalog stays (as before).
+Verified (export UAT): both- and HC-only exports have exactly ONE Indexes&Storage panel with all
+five tiles non-empty (Index usage, Per-collection storage, Cache fit, Oplog window, Fragmentation).
+
+## (e) Artifact self-UAT checklist — programmatic (pass/fail)
+Export HTML (rendered from real fixtures; `/tmp/uat/{ftdc,hc,both}/results.json`):
+- FTDC-only: General✓ · Healthcheck Report ABSENT✓ · FTDC charts PRESENT✓ · structural tiles
+  ABSENT✓ · Assessment(verdict+sizing+ledger)✓ · sharding caveat ABSENT (no hc)✓ · Evidence LAST✓.
+- HC-only: General✓ · Healthcheck Report PRESENT✓ · FTDC charts ABSENT✓ · 5/5 tiles non-empty✓ ·
+  exactly 1 Indexes&Storage panel✓ · Assessment(verdict+sizing+ledger)✓ · sharding caveat PRESENT✓
+  · Evidence LAST✓.
+- both: all sections present + 4-section order✓ · 5/5 tiles non-empty✓ · exactly 1 panel✓ ·
+  Assessment(verdict+sizing+ledger)✓ · sharding caveat PRESENT✓ · Evidence LAST✓.
+  → ALL EXPORT CHECKS PASSED (one initial FAIL was a flaw in the UAT probe — looked for the chart
+  markers after the JSON-blob split; corrected to detect rendered `id='cat_*'`/`class='plot'`).
+Assessment JSON (parsed from the same fixtures):
+- both: intent_members=[right_sizing,cost_optimization] (not full_sweep)✓ · intent.id is the union✓
+  · mode=intent✓ · sharding context_fired + sh.status() note✓ · lens leaders surface first✓ ·
+  structural index/schema/storage scored+fired✓.
+- hc-only: intent_members=[schema_review]✓ · sharding context_fired✓.
+- ftdc-only: intent_members=[right_sizing]✓ · sharding NOT context_fired (no hc)✓.
+Verified PROGRAMMATICALLY: above + `tsc --noEmit` ✓, `py_compile` ✓. NEEDS HUMAN EYES (GUI render
+only): the lens chips visually showing both intents selected; the in-place re-lens animation; the
+ContextCallouts card styling; Evidence collapsible being visually last on the tab.
+
+## (f) Build result
+`make app` → **EXIT 0** (sidecar rebuilt, vite ✓, cargo ✓, `tsc --noEmit` ✓, `py_compile` ✓).
+Bundles: `FTDC Analyzer.app` 36 MB · `FTDC Analyzer_0.1.0_aarch64.dmg` 26 MB. The **bundled**
+sidecar was re-run on all three input combos and BOTH self-UAT suites were executed against the
+artifacts the binary actually wrote (its `report.html` + `results.json`):
+- **Bundled export UAT** — ftdc / hc / both: ALL CHECKS PASSED (section presence/absence,
+  4-section order, 5/5 tiles non-empty, exactly one Indexes&Storage panel, verdict+sizing+ledger,
+  sharding caveat==shardsvr, Evidence LAST).
+- **Bundled assessment-JSON UAT** — ALL CHECKS PASSED (intent_members reflect the selected
+  intents/union, sharding context_fired only on shardsvr, structural scored+fired).
+Round-2 files touched: `ftdc_analyzer/verdicts.py` (sharding context post-score), `report.py`
+(reasoning + context callouts + assessment split for Evidence-last + catalog-dup fix),
+`app/src/lib/ruleset.ts` (context/evidence types), `AssessmentControls.tsx` (IntentLens),
+`AssessmentV2Panel.tsx` (lens re-lens + context callouts + extras slot), `App.tsx` (extras
+wiring). Left **staged, uncommitted** (lands with the rest of Phase 8 as one commit). GUI
+click-through (lens chips, re-lens, context card, Evidence-last on the tab) remains the human step.

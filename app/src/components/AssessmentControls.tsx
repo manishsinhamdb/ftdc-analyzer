@@ -230,6 +230,77 @@ export function CategorySelector({
 }
 
 // ---------------------------------------------------------------------------
+// Compact intent LENS multi-select for the Assessment tab control bar. Same union
+// semantics as the wizard's IntentPicker ("Full sweep" exclusive) but rendered as a tight
+// row of toggle chips. Re-lensing happens in the panel (client-side, no re-decode).
+// ---------------------------------------------------------------------------
+export function IntentLens({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [rs, setRs] = useState<RulesetDump | null>(null);
+  useEffect(() => {
+    let alive = true;
+    cachedRulesetDump()
+      .then((r) => alive && setRs(r))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const sel = useMemo(() => new Set(value), [value]);
+
+  if (!rs) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" /> loading lens…
+      </span>
+    );
+  }
+  const toggle = (id: string) => {
+    let next: Set<string>;
+    if (id === "full_sweep") {
+      next = sel.has("full_sweep") ? new Set() : new Set(["full_sweep"]);
+    } else {
+      next = new Set(sel);
+      next.delete("full_sweep");
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+    }
+    onChange(rs.intents.filter((i) => next.has(i.id)).map((i) => i.id));
+  };
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <FileText className="size-3.5" />
+      <span>lens</span>
+      <div className="flex flex-wrap gap-1">
+        {rs.intents.map((it) => {
+          const on = sel.has(it.id);
+          return (
+            <button
+              key={it.id}
+              onClick={() => toggle(it.id)}
+              title={it.subtitle}
+              className={
+                "rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors " +
+                (on
+                  ? "border-primary bg-primary/15 text-foreground"
+                  : "border-border text-muted-foreground hover:bg-secondary/40")
+              }
+            >
+              {it.title}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Intent picker — MULTI-select over the 7 presets. Click a card to add/remove (toggle);
 // "Full sweep" is exclusive. The combined (union) category preview + lock-flags update as
 // the selection changes. Ruleset dump is the shared cached promise (prefetched), and the

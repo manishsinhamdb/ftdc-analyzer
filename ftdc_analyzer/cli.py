@@ -201,6 +201,13 @@ def main(argv=None):
                 json.dump({"schema": "metrics_full/v1", "host": {"hostname": resolved_host,
                           "version": results.get("host", {}).get("mongo_version")},
                           "n_points": 0, "timeline": {"t": []}, "metrics": []}, fh)
+            # Self-contained HTML report (General + Healthcheck + structural tiles + Assessment;
+            # no FTDC charts). Best-effort — never fail the run.
+            try:
+                with open(os.path.join(out_dir, "report.html"), "w") as fh:
+                    fh.write(report.render_html(results))
+            except Exception as e:  # noqa: BLE001
+                rl.add(f"WARN report.html not written: {type(e).__name__}: {e}")
             rl.add(f"wrote {os.path.join(out_dir, 'results.json')}")
             print(f"hostname={resolved_host}")
             print(f"out_dir={out_dir}")

@@ -69,6 +69,10 @@ export interface ChartSeriesEntry {
   label: string;
   refLine?: number;
   refLabel?: string;
+  /** Explicit line colour. When set it overrides the positional palette — used by Explore
+   *  so the chip / line / summary-row swatch stay in lockstep regardless of which series
+   *  have data. (Keys here are always CSS-safe; Explore uses `mx0…` not raw metric paths.) */
+  color?: string;
 }
 
 export type ChartDataState = "present" | "requires_input" | "unavailable_version";
