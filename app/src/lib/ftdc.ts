@@ -34,8 +34,10 @@ export interface SignalStat {
 }
 
 export interface SeriesData {
-  t: number[]; // epoch ms
-  v: (number | null)[];
+  t: number[]; // epoch ms (fine buckets)
+  v: (number | null)[]; // per-fine-bucket mean (the line)
+  min?: (number | null)[]; // per-fine-bucket min (band low)
+  max?: (number | null)[]; // per-fine-bucket max (band high)
 }
 
 export interface HostInfo {
@@ -155,6 +157,10 @@ export interface FtdcResults {
   capture: CaptureInfo;
   signals: Record<string, SignalStat>;
   assessment: Assessment;
+  /** Layer-2 deterministic scorer output (ranked categories + ledgers). Typed in lib/ruleset. */
+  assessment_v2?: import("@/lib/ruleset").AssessmentV2;
+  /** Sizing Recommendation (Atlas-tier options); present for sizing/cost intents. */
+  sizing_recommendation?: import("@/lib/sizing").SizingRecommendation;
   verdicts: Verdicts;
   cost_optimization: CostOptimization;
   insights: Insight[];
@@ -398,7 +404,84 @@ export function formatAxisValue(v: number, unit: string): string {
 
 export interface ChartRow {
   t: number;
-  [key: string]: number | null;
+  // per series key: mean (number|null); `${key}_band`: [lo, hi] tuple for the min–max band.
+  [key: string]: number | null | number[];
+}
+
+// ---- Atlas-style granularity (bucket resolution, NEVER decimation) ----------
+export interface Granularity {
+  key: string;
+  label: string;
+  buckets: number;
+}
+export const GRANULARITIES: Granularity[] = [
+  { key: "coarse", label: "Coarse", buckets: 60 },
+  { key: "medium", label: "Medium", buckets: 200 },
+  { key: "fine", label: "Fine", buckets: 600 },
+  { key: "max", label: "Max", buckets: 3000 },
+];
+export const DEFAULT_GRANULARITY = 200;
+
+/** Re-aggregate the engine's fine buckets to `targetBuckets` equal-time display buckets
+ *  within [range]. Plots ALL data in the range (never decimation): mean = weighted mean
+ *  of fine means, band = [min of mins, max of maxs] so spikes survive at any granularity.
+ *  Rows carry `${key}` (mean) and `${key}_band` ([lo,hi]). */
+export function bucketSeries(
+  series: Record<string, SeriesData>,
+  keys: string[],
+  range: [number, number],
+  targetBuckets: number,
+): ChartRow[] {
+  const [s, e] = range;
+  const span = Math.max(0, e - s);
+  const nb = Math.max(1, Math.min(Math.round(targetBuckets), 5000));
+  const bw = span > 0 ? span / nb : 1;
+  type Acc = { sum: number; cnt: number; lo: number; hi: number };
+  const buckets = new Map<number, Record<string, Acc>>();
+  for (const k of keys) {
+    const sd = series[k];
+    if (!sd || !sd.t) continue;
+    for (let i = 0; i < sd.t.length; i++) {
+      const t = sd.t[i];
+      if (t < s || t > e) continue;
+      const mean = sd.v?.[i];
+      if (mean === null || mean === undefined || !Number.isFinite(mean)) continue;
+      const bi = span > 0 ? Math.min(nb - 1, Math.floor((t - s) / bw)) : 0;
+      let b = buckets.get(bi);
+      if (!b) {
+        b = {};
+        buckets.set(bi, b);
+      }
+      let acc = b[k];
+      if (!acc) {
+        acc = { sum: 0, cnt: 0, lo: Infinity, hi: -Infinity };
+        b[k] = acc;
+      }
+      acc.sum += mean;
+      acc.cnt += 1;
+      const lo = sd.min?.[i];
+      const hi = sd.max?.[i];
+      acc.lo = Math.min(acc.lo, lo !== null && lo !== undefined && Number.isFinite(lo) ? lo : mean);
+      acc.hi = Math.max(acc.hi, hi !== null && hi !== undefined && Number.isFinite(hi) ? hi : mean);
+    }
+  }
+  const rows: ChartRow[] = [];
+  for (const [bi, b] of Array.from(buckets.entries()).sort((a, c) => a[0] - c[0])) {
+    const row: ChartRow = { t: Math.round(s + (bi + 0.5) * bw) };
+    for (const k of keys) {
+      const acc = b[k];
+      if (acc && acc.cnt > 0) {
+        const m = acc.sum / acc.cnt;
+        row[k] = m;
+        row[`${k}_band`] = [Number.isFinite(acc.lo) ? acc.lo : m, Number.isFinite(acc.hi) ? acc.hi : m];
+      } else {
+        row[k] = null;
+        row[`${k}_band`] = null;
+      }
+    }
+    rows.push(row);
+  }
+  return rows;
 }
 
 /** Merge multiple named series into Recharts rows keyed by timestamp,
@@ -449,14 +532,15 @@ export function globalRange(
   return Number.isFinite(mn) ? [mn, mx] : [0, 0];
 }
 
-export type Preset = "all" | "48h" | "24h" | "12h" | "6h";
+export type Preset = "all" | "48h" | "24h" | "12h" | "6h" | "1h";
 
 export const PRESETS: { key: Preset; label: string }[] = [
-  { key: "all", label: "All" },
+  { key: "all", label: "Full" },
   { key: "48h", label: "48h" },
   { key: "24h", label: "24h" },
   { key: "12h", label: "12h" },
   { key: "6h", label: "6h" },
+  { key: "1h", label: "1h" },
 ];
 
 export function rangeForPreset(
@@ -470,6 +554,7 @@ export function rangeForPreset(
     "24h": 24,
     "12h": 12,
     "6h": 6,
+    "1h": 1,
   };
   return [Math.max(mn, mx - hours[p] * 3600 * 1000), mx];
 }

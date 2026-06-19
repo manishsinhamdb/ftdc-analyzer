@@ -22,6 +22,8 @@ import {
   PanelLeftOpen,
   Play,
   Server,
+  Settings2,
+  SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -58,7 +60,23 @@ import { InsightsStrip } from "@/components/InsightsStrip";
 import { SystemView } from "@/components/SystemView";
 import { ExploreView } from "@/components/ExploreView";
 import { AssessmentPanel } from "@/components/AssessmentPanel";
+import { AssessmentV2Panel } from "@/components/AssessmentV2Panel";
+import { SizingPanel } from "@/components/SizingPanel";
+import { resizeFromCache } from "@/lib/sizing";
+import { MethodologyRules } from "@/components/MethodologyRules";
+import { type AssessmentMode } from "@/components/AssessmentControls";
+import { relensAssessment, mergeIntents, cachedRulesetDump } from "@/lib/ruleset";
+import { getLlmConfig, setLlmConfig } from "@/lib/llm";
+import {
+  type Baseline,
+  type Selections,
+  classifyRun,
+  loadRunSnapshot,
+  saveRunSnapshot,
+  deleteRunSnapshot,
+} from "@/lib/preflight";
 import { Landing } from "@/components/Landing";
+import { LlmSettings } from "@/components/LlmSettings";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -78,12 +96,13 @@ import {
   MASTER_SERIES,
   STATUS_COLORS,
   VERDICT_COLORS,
+  DEFAULT_GRANULARITY,
   fmtNum,
   fmtSpan,
   historyEntryLabels,
 } from "@/lib/ftdc";
 
-type View = "overview" | "inference" | "charts" | "signals" | "system" | "explore";
+type View = "overview" | "inference" | "charts" | "signals" | "system" | "explore" | "methodology";
 
 const VERDICT_META: Record<
   string,
@@ -105,6 +124,7 @@ const NAV: {
   { label: "Signals", view: "signals", icon: Database, tip: "Searchable table of every derived signal" },
   { label: "System", view: "system", icon: Server, tip: "Full host build, OS, and mongod config" },
   { label: "Explore", view: "explore", icon: Compass, tip: "Browse and chart any of the 1300+ raw metrics" },
+  { label: "Methodology", view: "methodology", icon: SlidersHorizontal, tip: "View & tune the scoring ruleset: categories, signals, conditioning" },
   { label: "Assessment", view: "inference", icon: Sparkles, tip: "Opt-in automated first-pass findings and recommendations" },
 ];
 
@@ -238,6 +258,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>("overview");
   const [range, setRange] = useState<[number, number] | null>(null);
+  const [granularity, setGranularity] = useState<number>(DEFAULT_GRANULARITY);
   const [activeCat, setActiveCat] = useState<string>("");
   const [metricsFull, setMetricsFull] = useState<MetricsFull | null>(null);
   const [mfLoading, setMfLoading] = useState(false);
@@ -257,10 +278,64 @@ export default function App() {
     }
   });
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
+  const [llmOpen, setLlmOpen] = useState(false); // LLM Settings modal
   // Opt-in gate for the Automated Assessment. Default OFF so the default view is
   // unbiased. HOOK POINT: when wired, flipping this on should trigger the future
   // local-LLM assessment run (today it just reveals the deterministic pass).
-  const [generateAssessment, setGenerateAssessment] = useState(false);
+  const [generateAssessment, setGenerateAssessment] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("ftdc.generateAssessment") === "1";
+    } catch {
+      return false;
+    }
+  });
+  // Assessment mode (grounded ledger vs LLM-reasoned narrative) + targeted category —
+  // chosen on the landing screen and the Assessment tab, persisted across runs.
+  const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>(() => {
+    try {
+      return (localStorage.getItem("ftdc.assessmentMode") as AssessmentMode) || "grounded";
+    } catch {
+      return "grounded";
+    }
+  });
+  const [targetCategory, setTargetCategory] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("ftdc.targetCategory") || null;
+    } catch {
+      return null;
+    }
+  });
+  // Pre-flight intake: assessment intent (lens) + optional input file paths.
+  const [intent, setIntent] = useState<string>(() => {
+    try {
+      return localStorage.getItem("ftdc.intent") || "full_sweep";
+    } catch {
+      return "full_sweep";
+    }
+  });
+  const [healthcheckPath, setHealthcheckPath] = useState<string | null>(null);
+  const [profilerPath, setProfilerPath] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null); // LLM model for narration
+  const [cloud, setCloud] = useState<string>(() => {
+    try {
+      return localStorage.getItem("ftdc.cloud") || "aws";
+    } catch {
+      return "aws";
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("ftdc.generateAssessment", generateAssessment ? "1" : "0");
+      localStorage.setItem("ftdc.assessmentMode", assessmentMode);
+      localStorage.setItem("ftdc.intent", intent);
+      localStorage.setItem("ftdc.cloud", cloud);
+      if (targetCategory) localStorage.setItem("ftdc.targetCategory", targetCategory);
+      else localStorage.removeItem("ftdc.targetCategory");
+    } catch {
+      /* persistence best-effort */
+    }
+  }, [generateAssessment, assessmentMode, targetCategory, intent, cloud]);
 
   async function loadFrom(dir: string, label: string): Promise<FtdcResults> {
     const d = await readJson<FtdcResults>(dir, "results.json");
@@ -280,6 +355,9 @@ export default function App() {
     invoke<string>("get_username")
       .then((u) => setUsername(u))
       .catch(() => setUsername(""));
+    // Prefetch the ruleset dump (single shared cache) so the wizard Step-2 intent
+    // selector paints instantly instead of spawning the engine on entry.
+    cachedRulesetDump().catch(() => {});
   }, []);
 
   // Persist the sidebar collapsed choice across relaunches.
@@ -362,6 +440,16 @@ export default function App() {
     }
   }
 
+  // Optional intake files — path recorded for the future parser; not scored yet.
+  async function pickFile(title: string, setter: (p: string) => void) {
+    try {
+      const sel = await openDialog({ directory: false, multiple: false, title });
+      if (typeof sel === "string") setter(sel);
+    } catch (e) {
+      toast.error(`File picker unavailable: ${String(e)}`);
+    }
+  }
+
   async function analyze() {
     if (!selectedPath) {
       toast.error("Pick a folder first.");
@@ -371,7 +459,14 @@ export default function App() {
     try {
       const res = await invoke<{ dir: string; hostname: string }>("analyze_path", {
         path: selectedPath,
+        targetCategory: targetCategory,
+        intent: intent,
+        healthcheck: healthcheckPath,
+        profiler: profilerPath,
+        cloud: cloud,
       });
+      // The pre-flight configured an assessment intent + mode → opt in to the panel.
+      setGenerateAssessment(true);
       const loaded = await loadFrom(res.dir, `${res.hostname} (live)`);
       setView("overview");
       toast.success(`Analyzed ${res.hostname}`);
@@ -387,11 +482,121 @@ export default function App() {
       invoke<RunHistoryEntry[]>("record_run", { entry })
         .then((h) => setHistory(h))
         .catch(() => {});
+      // Persist the full selection snapshot so this run can be re-opened on Review
+      // prefilled, and the right run action computed (change-detection).
+      saveRunSnapshot(res.dir, res.hostname, {
+        ftdc: selectedPath,
+        intent,
+        mode: assessmentMode,
+        model,
+        healthcheck: healthcheckPath,
+        profiler: profilerPath,
+        cloud,
+      });
     } catch (e) {
       toast.error(`Analysis failed: ${String(e)}`);
     } finally {
       setAnalyzing(false);
     }
+  }
+
+  // Open a cached run's results.json; optionally re-lens its assessment for a new intent
+  // (the "re-run from cached decode" path — no FTDC re-decode).
+  async function openCachedRun(dir: string, label: string, relensIntentId?: string) {
+    try {
+      const d = await readJson<FtdcResults>(dir, "results.json");
+      if (relensIntentId && d.assessment_v2) {
+        const rs = await cachedRulesetDump();
+        const ids = relensIntentId.split(",").filter(Boolean);
+        const merged = mergeIntents(rs.intents.filter((i) => ids.includes(i.id)));
+        if (merged) relensAssessment(d.assessment_v2, merged);
+      }
+      // Re-run path: recompute sizing for the current cloud/intent from the cached
+      // decode (no FTDC re-decode), keeping sizing authoritative in the engine.
+      if (relensIntentId !== undefined) {
+        try {
+          d.sizing_recommendation = await resizeFromCache(`${dir}/results.json`, cloud, intent);
+        } catch {
+          /* keep cached sizing if resize fails */
+        }
+      }
+      setData(d);
+      setDataDir(dir);
+      setSourceLabel(label);
+      setMetricsFull(null);
+      setError(null);
+      setGenerateAssessment(true);
+      setView("overview");
+    } catch (e) {
+      toast.error(`Could not open cached run (it may have been cleared): ${String(e)}`);
+    }
+  }
+
+  // Review "Run" — executes open / re-run / re-analyze per change-detection vs baseline.
+  async function runFromReview(baseline: Baseline | null) {
+    const cur: Selections = {
+      ftdc: selectedPath,
+      intent,
+      mode: assessmentMode,
+      model,
+      healthcheck: healthcheckPath,
+      profiler: profilerPath,
+      cloud,
+    };
+    const plan = classifyRun(baseline, cur);
+    setGenerateAssessment(true);
+    if (plan.action === "reanalyze" || !baseline) {
+      await analyze();
+    } else {
+      await openCachedRun(
+        baseline.cache_dir,
+        `${baseline.hostname} (cached)`,
+        plan.action === "rerun" ? intent : undefined,
+      );
+    }
+  }
+
+  // Recent → prefill all selections from the run's snapshot and return the baseline.
+  function selectRecent(entry: RunHistoryEntry): Baseline {
+    const snap = loadRunSnapshot(entry.cache_dir);
+    const baseline: Baseline = {
+      ftdc: entry.source_path,
+      intent: snap?.intent ?? "full_sweep",
+      mode: (snap?.mode as AssessmentMode) ?? "grounded",
+      model: snap?.model ?? null,
+      healthcheck: snap?.healthcheck ?? null,
+      profiler: snap?.profiler ?? null,
+      cloud: snap?.cloud ?? "aws",
+      cache_dir: entry.cache_dir,
+      hostname: entry.hostname,
+    };
+    setSelectedPath(baseline.ftdc);
+    setIntent(baseline.intent);
+    setAssessmentMode(baseline.mode);
+    setHealthcheckPath(baseline.healthcheck);
+    setProfilerPath(baseline.profiler);
+    setModel(baseline.model);
+    setCloud(baseline.cloud);
+    if (baseline.model) {
+      getLlmConfig()
+        .then((c) => setLlmConfig({ ...c, model: baseline.model }))
+        .catch(() => {});
+    }
+    return baseline;
+  }
+
+  function deleteHistoryEntry(cacheDir: string) {
+    invoke<RunHistoryEntry[]>("delete_history_entry", { cacheDir })
+      .then((h) => setHistory(h))
+      .catch((e) => toast.error(`Could not delete: ${String(e)}`));
+    deleteRunSnapshot(cacheDir);
+  }
+
+  function clearAllHistory() {
+    history.forEach((h) => deleteRunSnapshot(h.cache_dir));
+    invoke<RunHistoryEntry[]>("clear_history")
+      .then((h) => setHistory(h))
+      .catch((e) => toast.error(`Could not clear history: ${String(e)}`));
   }
 
   const master = useMemo(() => {
@@ -420,14 +625,36 @@ export default function App() {
       <>
         <Landing
           username={username}
-          selectedPath={selectedPath}
           analyzing={analyzing}
           error={error}
+          selectedPath={selectedPath}
           onPick={pickFolder}
-          onAnalyze={analyze}
+          healthcheckPath={healthcheckPath}
+          onPickHealthcheck={() =>
+            pickFile("Select a healthcheck snapshot (getMongoData.js output)", setHealthcheckPath)
+          }
+          onClearHealthcheck={() => setHealthcheckPath(null)}
+          profilerPath={profilerPath}
+          onPickProfiler={() =>
+            pickFile("Select a profiler / slow-query log file", setProfilerPath)
+          }
+          onClearProfiler={() => setProfilerPath(null)}
+          intent={intent}
+          onIntentChange={setIntent}
+          cloud={cloud}
+          onCloudChange={setCloud}
+          assessmentMode={assessmentMode}
+          onAssessmentModeChange={setAssessmentMode}
+          model={model}
+          onModelChange={setModel}
+          onRun={runFromReview}
           history={history}
-          onSelectHistory={loadHistoryEntry}
+          onSelectRecent={selectRecent}
+          onDeleteEntry={deleteHistoryEntry}
+          onClearHistory={clearAllHistory}
+          onOpenLlmSettings={() => setLlmOpen(true)}
         />
+        <LlmSettings open={llmOpen} onOpenChange={setLlmOpen} />
         <Toaster richColors position="bottom-right" theme="dark" />
       </>
     );
@@ -488,6 +715,18 @@ export default function App() {
           {!collapsed && (
             <div className="px-2 text-[10px] text-muted-foreground">schema v{data.schema_version}</div>
           )}
+          <button
+            onClick={() => setLlmOpen(true)}
+            title="LLM Settings — configure the model provider"
+            aria-label="LLM Settings"
+            className={
+              "flex items-center rounded-md text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground " +
+              (collapsed ? "justify-center px-2 py-2" : "justify-start gap-2 px-3 py-2")
+            }
+          >
+            <Settings2 className="size-4 shrink-0" />
+            {!collapsed && "LLM Settings"}
+          </button>
           <button
             onClick={() => setCollapsed((c) => !c)}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -632,9 +871,10 @@ export default function App() {
               <div className="sticky top-0 z-30 -mx-6 -mt-6 mb-4 border-b border-border bg-background px-6 pb-3 pt-6">
                 <RangeSelector
                   capture={data.capture}
-                  masterSeries={master}
                   value={effectiveRange}
                   onChange={setRange}
+                  granularity={granularity}
+                  onGranularityChange={setGranularity}
                 />
               </div>
 
@@ -658,6 +898,7 @@ export default function App() {
                       spec={spec}
                       series={data.series}
                       range={effectiveRange}
+                      granularity={granularity}
                       className={spansTwoCols(spec) ? "xl:col-span-2" : undefined}
                     />
                   ) : null;
@@ -691,9 +932,10 @@ export default function App() {
                 </TabsList>
                 <RangeSelector
                   capture={data.capture}
-                  masterSeries={master}
                   value={effectiveRange}
                   onChange={setRange}
+                  granularity={granularity}
+                  onGranularityChange={setGranularity}
                 />
               </div>
 
@@ -710,6 +952,7 @@ export default function App() {
                           spec={ch}
                           series={data.series}
                           range={effectiveRange}
+                          granularity={granularity}
                           className={cls}
                         />
                       );
@@ -720,12 +963,29 @@ export default function App() {
             </Tabs>
           )}
 
+          {data && view === "methodology" && <MethodologyRules />}
+
           {data && view === "inference" && (
             generateAssessment && data.assessment ? (
-              <AssessmentPanel
-                assessment={data.assessment}
-                costOptimization={data.cost_optimization}
-              />
+              <div className="space-y-4">
+                {data.sizing_recommendation?.applies_to_intent && (
+                  <SizingPanel sizing={data.sizing_recommendation} />
+                )}
+                {data.assessment_v2 && (
+                  <AssessmentV2Panel
+                    v2={data.assessment_v2}
+                    mode={assessmentMode}
+                    onModeChange={setAssessmentMode}
+                    targetCategory={targetCategory}
+                    onTargetCategoryChange={setTargetCategory}
+                    sizing={data.sizing_recommendation}
+                  />
+                )}
+                <AssessmentPanel
+                  assessment={data.assessment}
+                  costOptimization={data.cost_optimization}
+                />
+              </div>
             ) : (
               <Card>
                 <CardContent className="flex flex-col items-center justify-center gap-4 py-16 text-center">
@@ -768,6 +1028,7 @@ export default function App() {
           )}
         </main>
       </div>
+      <LlmSettings open={llmOpen} onOpenChange={setLlmOpen} />
       <Toaster richColors position="bottom-right" theme="dark" />
     </div>
   );
