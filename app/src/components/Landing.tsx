@@ -24,6 +24,7 @@ import { type RunHistoryEntry, historyEntryLabels } from "@/lib/ftdc";
 import {
   type IntentDef,
   type InputRegistryEntry,
+  DEFAULT_INPUT_REGISTRY,
   cachedInputRegistry,
   cachedRulesetDump,
 } from "@/lib/ruleset";
@@ -222,14 +223,17 @@ export function Landing(props: Props) {
   const [baseline, setBaseline] = useState<Baseline | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [intents, setIntents] = useState<IntentDef[]>([]);
-  const [inputReg, setInputReg] = useState<InputRegistryEntry[]>([]);
+  // Seed from the built-in default registry so the Inputs step paints INSTANTLY; the engine's
+  // registry (which may carry operator overrides) hydrates over it non-blockingly. Never gated
+  // on the sidecar spawn (Phase-9 fixed the registry-load stall by removing the first-paint gate).
+  const [inputReg, setInputReg] = useState<InputRegistryEntry[]>(DEFAULT_INPUT_REGISTRY.inputs);
 
   useEffect(() => {
     cachedRulesetDump()
       .then((rs) => setIntents(rs.intents))
       .catch(() => {});
     cachedInputRegistry()
-      .then((r) => r && setInputReg(r.inputs))
+      .then((r) => setInputReg(r.inputs))
       .catch(() => {});
   }, []);
 
@@ -435,43 +439,37 @@ export function Landing(props: Props) {
               {step === 1 && (
                 <section className="space-y-2">
                   <h2 className="text-sm font-semibold">Step 1 · Inputs <span className="font-normal text-muted-foreground">— provide at least one primary input</span></h2>
-                  {inputReg.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">Loading input types…</p>
-                  ) : (
-                    <>
-                      {primaryInputs.map((e) => (
-                        <InputSlot
-                          key={e.id}
-                          icon={e.id === "ftdc" ? <Database className="size-4" /> : <FileText className="size-4" />}
-                          title={e.label}
-                          badge="primary"
-                          path={inputValues[e.id] ?? null}
-                          unlocks={e.description}
-                          onPick={() => onPickInput(e.id, e.label)}
-                          onClear={() => onClearInput(e.id)}
-                          help={e.id === "ftdc" ? undefined : <RegistryCollectorHelp collector={e.collector} />}
-                        />
-                      ))}
-                      {evidenceInputs.length > 0 && (
-                        <div className="pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                          Optional evidence — sharpens specific categories
-                        </div>
-                      )}
-                      {evidenceInputs.map((e) => (
-                        <InputSlot
-                          key={e.id}
-                          icon={<FileText className="size-4" />}
-                          title={e.label}
-                          badge="optional"
-                          path={inputValues[e.id] ?? null}
-                          unlocks={e.description}
-                          onPick={() => onPickInput(e.id, e.label)}
-                          onClear={() => onClearInput(e.id)}
-                          help={<RegistryCollectorHelp collector={e.collector} />}
-                        />
-                      ))}
-                    </>
+                  {primaryInputs.map((e) => (
+                    <InputSlot
+                      key={e.id}
+                      icon={e.id === "ftdc" ? <Database className="size-4" /> : <FileText className="size-4" />}
+                      title={e.label}
+                      badge="primary"
+                      path={inputValues[e.id] ?? null}
+                      unlocks={e.description}
+                      onPick={() => onPickInput(e.id, e.label)}
+                      onClear={() => onClearInput(e.id)}
+                      help={e.id === "ftdc" ? undefined : <RegistryCollectorHelp collector={e.collector} />}
+                    />
+                  ))}
+                  {evidenceInputs.length > 0 && (
+                    <div className="pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Optional evidence — sharpens specific categories
+                    </div>
                   )}
+                  {evidenceInputs.map((e) => (
+                    <InputSlot
+                      key={e.id}
+                      icon={<FileText className="size-4" />}
+                      title={e.label}
+                      badge="optional"
+                      path={inputValues[e.id] ?? null}
+                      unlocks={e.description}
+                      onPick={() => onPickInput(e.id, e.label)}
+                      onClear={() => onClearInput(e.id)}
+                      help={<RegistryCollectorHelp collector={e.collector} />}
+                    />
+                  ))}
                   {!selectedPath && healthcheckPath && (
                     <p className="rounded-md border border-border bg-secondary/20 px-3 py-2 text-[11px] text-muted-foreground">
                       Healthcheck-only run: structural scoring, sizing and the Healthcheck Report

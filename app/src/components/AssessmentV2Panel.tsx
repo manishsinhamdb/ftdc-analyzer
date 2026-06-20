@@ -23,6 +23,7 @@ import {
   type InputRegistry,
   type IntentDef,
   type LedgerRow,
+  DEFAULT_INPUT_REGISTRY,
   FAMILY_COLOR,
   cachedInputRegistry,
   cachedRulesetDump,
@@ -581,7 +582,7 @@ export function AssessmentV2Panel({
   // Intent lens (multi-select), initialized to the run's chosen intents. Changing it
   // re-lenses the already-scored assessment in place (client-side; no re-decode).
   const [rsIntents, setRsIntents] = useState<IntentDef[]>([]);
-  const [inputRegistry, setInputRegistry] = useState<InputRegistry | null>(null);
+  const [inputRegistry, setInputRegistry] = useState<InputRegistry>(DEFAULT_INPUT_REGISTRY);
   const [intentIds, setIntentIds] = useState<string[]>(() => initialIntentIds(v2));
   useEffect(() => {
     cachedRulesetDump().then((r) => setRsIntents(r.intents)).catch(() => {});

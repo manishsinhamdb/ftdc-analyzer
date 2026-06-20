@@ -97,6 +97,89 @@ export interface InputRegistry {
   primary: string[];
 }
 
+// Built-in default registry — mirrors the engine's seeded inputs so the wizard Inputs step
+// paints INSTANTLY (no first-paint gate on a sidecar spawn). The engine's `inputs_registry`
+// (which may carry operator overrides) hydrates over this non-blockingly. Keep in sync with
+// ftdc_analyzer/inputs/registry.py (a self-UAT asserts the ids/primary set match).
+export const DEFAULT_INPUT_REGISTRY: InputRegistry = {
+  version: 1,
+  primary: ["ftdc", "healthcheck"],
+  inputs: [
+    {
+      id: "ftdc", label: "FTDC diagnostic.data", format: "dir", primary: true, parseable: false,
+      parser: null, cli_flag: null,
+      description:
+        "MongoDB Full-Time Diagnostic Data Capture — host-level time-series the engine decodes directly.",
+      unlocks: ["memory_cache_pressure", "cpu_compute_sizing", "disk_io_saturation",
+        "replication_lag_cascade", "write_path_contention", "connection_workload_surge",
+        "checkpoint_storage_stalls", "errors_stability", "version_config_risk", "periodic_health_review"],
+      collector: {
+        command: "cp -r <dbPath>/diagnostic.data ./diagnostic.data   # then select the folder",
+        where: "the mongod host (the data directory)",
+        role: "filesystem read on the mongod data dir",
+        security_note: "FTDC holds host-level metrics + config metadata only — no document data.",
+        doc: "Atlas captures it automatically; self-managed mongod writes it under dbPath.",
+      },
+    },
+    {
+      id: "healthcheck", label: "Healthcheck snapshot (getMongoData)", format: "json",
+      primary: true, parseable: true, parser: "ftdc_analyzer.inputs.healthcheck_input:parse",
+      cli_flag: "--healthcheck",
+      description:
+        "getMongoData/Keyhole snapshot — server/host facts, per-collection storage & index stats, topology, oplog.",
+      unlocks: ["index_health_bloat", "schema_datamodel", "storage_capacity_design"],
+      collector: {
+        command: 'mongosh "<uri>" --quiet --file collectors/getMongoData.js > healthcheck.json',
+        where: "any replica-set member (run on each member to compare)",
+        role: "clusterMonitor + readAnyDatabase",
+        security_note: "Reveals database/collection names + index keys (schema-revealing); no document data.",
+        doc: "The collector script is bundled at collectors/getMongoData.js.",
+      },
+    },
+    {
+      id: "profiler", label: "Query profiler / slow-query log", format: "json", primary: false,
+      parseable: false, parser: null, cli_flag: "--profiler",
+      description: "system.profile export or slow-query log — the per-query truth FTDC's proxy cannot provide.",
+      unlocks: ["query_targeting_index_recs", "slow_query_hotspots"],
+      collector: {
+        command: "db.setProfilingLevel(1,{slowms:100});  // later: mongoexport -d <db> -c system.profile > profiler.json",
+        where: "a representative member, during a representative window",
+        role: "clusterMonitor + read on the profiled db",
+        security_note: "Query predicates can contain literal field VALUES (PII). Redact / handle locally; lower slowms only briefly.",
+        doc: "Disable afterwards: db.setProfilingLevel(0).",
+      },
+    },
+    {
+      id: "sh_status", label: "Sharding status (sh.status())", format: "json", primary: false,
+      parseable: true, parser: "ftdc_analyzer.inputs.sh_status:parse", cli_flag: "--sh-status",
+      description:
+        "Sharded-cluster topology — shards, databases & primary shards, sharded collections, chunk counts, balancer, jumbo chunks.",
+      unlocks: ["sharding_topology"],
+      collector: {
+        command: 'mongosh "<mongos-uri>" --quiet --eval "sh.status()" > sh_status.json',
+        where: "a mongos router (NOT a shard mongod)",
+        role: "clusterMonitor",
+        security_note: "Exposes shard hostnames, database/collection names and shard keys (schema-revealing) — no document data.",
+        doc: "Must come from a mongos; a shard mongod cannot see cluster-wide chunk state.",
+      },
+    },
+    {
+      id: "rs_status", label: "Replica-set status (rs.status())", format: "json", primary: false,
+      parseable: true, parser: "ftdc_analyzer.inputs.rs_status:parse", cli_flag: "--rs-status",
+      description:
+        "replSetGetStatus — full member roster, per-member state/health/optime, measured replication lag, term & configVersion.",
+      unlocks: ["replication_lag_cascade"],
+      collector: {
+        command: 'mongosh "<member-uri>" --quiet --eval "JSON.stringify(rs.status())" > rs_status.json',
+        where: "any replica-set member (primary or secondary)",
+        role: "clusterMonitor",
+        security_note: "Exposes member hostnames + replication state only — no document data.",
+        doc: "Gives the full roster (not just the captured member) + measured lag.",
+      },
+    },
+  ],
+};
+
 export interface RulesetDump {
   version: number;
   families: string[];
@@ -278,10 +361,17 @@ export function unlockMessage(missing: string[], registry?: InputRegistry | null
   return `Data not available — provide ${missing.join(", ")} to populate this.`;
 }
 
-// Shared, prefetchable input-registry promise (derived from the same cached ruleset dump).
-export async function cachedInputRegistry(): Promise<InputRegistry | null> {
-  const dump = await cachedRulesetDump();
-  return dump.inputs_registry ?? null;
+// Shared input-registry promise derived from the SAME cached ruleset dump (one sidecar spawn
+// per session, prefetched on app mount). Always resolves to a usable registry — the built-in
+// default if the engine dump lacks one or the sidecar is unreachable — so the UI never blocks
+// on it and never shows a "loading" stall.
+export async function cachedInputRegistry(): Promise<InputRegistry> {
+  try {
+    const dump = await cachedRulesetDump();
+    return dump.inputs_registry ?? DEFAULT_INPUT_REGISTRY;
+  } catch {
+    return DEFAULT_INPUT_REGISTRY;
+  }
 }
 
 // Client-side re-lens of an already-scored assessment for a new intent — reorders +

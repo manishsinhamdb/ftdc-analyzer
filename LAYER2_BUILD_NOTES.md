@@ -1077,3 +1077,79 @@ sharding deep), cli.py (--sh-status/--rs-status + registry in dump), Rust lib.rs
 UI (ruleset.ts registry types + cachedInputRegistry, AssessmentControls/AssessmentV2Panel,
 CollectorHelp generic, Landing registry-driven slots, App generic input plumbing, preflight).
 Left **staged, uncommitted** (no commit/tag/push). GUI click-through is the human step.
+
+---
+
+# Regression-fix pass — Inputs-step stall + contrast/overlap verification (post-Phase-9)
+
+Three reported regressions; **only #1 was a genuine source regression** (Phase-9-introduced).
+#2 and #3 were verified intact in both source AND the compiled bundle (git + compiled-CSS
+evidence) — the likely real-world cause was a stale `.app` bundle. Frontend/perf only; decoder +
+scorer untouched. Added grep-based regression GUARDS (A26) so a future genuine revert is caught.
+
+## #1 (REAL) — Inputs-step "Loading input types…" stall: root cause + fix
+ROOT CAUSE: Phase 9 made the wizard Inputs slots registry-driven — they render from the engine's
+`--dump-ruleset → inputs_registry`. The Step-1 render GATED first paint on `inputReg.length === 0`
+("Loading input types…") until the async dump resolved. The dump IS module-cached
+(`cachedRulesetDump`, prefetched on app mount) and a single cold spawn is ~5.5 s — but (a) the
+first Inputs entry per session still waited the full cold start, and (b) if that promise was slow
+(PyInstaller onefile temp-extraction + AV/Gatekeeper scan of the 36 MB binary) or rejected, the
+step showed "Loading…" indefinitely (the observed "minutes" hang). Pre-Phase-9 the slots were
+hardcoded JSX → instant; the registry-driven rewrite introduced the gate. (One unrelated uncached
+`rulesetDump()` exists in the Methodology tab — intentionally kept fresh: it reloads after operator
+override edits, where the cache would be stale; it is NOT on the Inputs path.)
+FIX: a built-in `DEFAULT_INPUT_REGISTRY` (lib/ruleset.ts) mirrors the engine's 5 inputs; the Inputs
+step seeds `inputReg` from it so it paints INSTANTLY, and `cachedInputRegistry()` (now returning the
+default on any miss/error instead of null) hydrates over it non-blockingly when the cached dump
+arrives. The `length === 0` gate is removed entirely — first AND subsequent entries paint with no
+stall, regardless of dump speed or reachability. A self-UAT asserts the TS default ids/primary stay
+in sync with `ftdc_analyzer/inputs/registry.py`.
+
+## #2 (NOT a source regression) — Overview verdict-card overlap
+`git diff 9c63973..HEAD -- app/src/App.tsx` shows the Overview grid is UNCHANGED since the polish
+(`grid grid-cols-1 gap-4 lg:grid-cols-3`, each `VerdictCard` still `flex min-w-0 flex-col
+overflow-hidden`, content `line-clamp-3` + `flex-wrap`); InsightsStrip/VerdictCard untouched. No
+layout/grid revert was introduced (the only Phase-9 edit there wrapped the section in
+`{data.verdicts && …}` — same classes). No overlap source cause found; a fresh build ships the
+intact layout.
+
+## #3 (NOT a source regression) — contrast + base font
+`index.css` was last touched in Phase 7 (which ADDED the `.light` block as a SEPARATE selector — it
+does NOT clobber `:root`/`.dark`). Both `:root` and `.dark` still carry `--muted-foreground:#aebfd2`
+and `@layer base html { font-size: 17px }` is present; `main.tsx` applies `.dark` by default. PROOF:
+the freshly compiled bundle (`vite build`) contains `font-size:17px` and `--muted-foreground:#aebfd2`
+(dark) + `#5b6b7a` (light). The polish values were never reverted in source or output — the symptom
+was a stale runtime bundle. Deliberately left index.css UNCHANGED (the values are correct; editing
+correct CSS would risk introducing the very regression).
+
+## Regression GUARDS added (scripts/uat_regression_guard.py)
+Grep/parse static checks (run via `python3 scripts/uat_regression_guard.py`):
+- #3: `:root` AND `.dark` carry `--muted-foreground: #aebfd2`; `.light` has its variant; base
+  `html{font-size:17px}`; no leftover old `#8AA0B6` muted.
+- #1: Landing has NO "Loading input types…" render string; `inputReg` seeded from
+  `DEFAULT_INPUT_REGISTRY.inputs`; hydrates via `cachedInputRegistry()`; `cachedRulesetDump` is
+  module-cached; Landing makes no uncached `rulesetDump()` call.
+- sync: TS `DEFAULT_INPUT_REGISTRY` ids/primary == engine `inputs.registry.REGISTRY`.
+→ ALL GUARDS PASS.
+
+## Self-UAT checklist (programmatic / human-eyes)
+- [PASS] Inputs step does not gate first paint on the dump (seeds from default; hydrates via the
+  shared cache; no per-entry spawn) — static-asserted.
+- [PASS] index.css both theme blocks carry the lifted muted-foreground + 17px base font (grep guard).
+- [PASS] compiled bundle carries `font-size:17px` + `--muted-foreground:#aebfd2`/`#5b6b7a` (vite build grep).
+- [PASS] TS default registry in sync with the engine registry.
+- [PASS] `tsc --noEmit`, `cargo check` (unchanged), `vite build`.
+- NEEDS HUMAN EYES: the Inputs step painting instantly on first+subsequent entries (no stall); the
+  Overview cards laying out cleanly; secondary text high-contrast + larger font in both themes —
+  best confirmed on the freshly rebuilt `.app` (the prior runtime symptom was a stale bundle).
+
+## Build
+`make app` → **EXIT 0** (vite ✓, cargo ✓, `tsc --noEmit` ✓). Bundles: `FTDC Analyzer.app` 36 MB ·
+`FTDC Analyzer_0.1.0_aarch64.dmg` 26 MB. The freshly-built `dist/assets/*.css` that `tauri build`
+embeds into the `.app` carries `font-size:17px` + `--muted-foreground:#aebfd2`(dark)/`#5b6b7a`(light)
+— so the shipped bundle has the correct contrast/font (the prior runtime symptom was a stale .app).
+Regression guards (`scripts/uat_regression_guard.py`) all PASS. Files: `app/src/lib/ruleset.ts`
+(DEFAULT_INPUT_REGISTRY + resilient cachedInputRegistry), `Landing.tsx` (seed from default, gate
+removed), `AssessmentV2Panel.tsx` (seed registry from default), `MethodologyRules.tsx` (comment only;
+kept fresh fetch), new `scripts/uat_regression_guard.py`. index.css UNCHANGED (values already correct).
+Left **staged, uncommitted** (no commit/tag/push).

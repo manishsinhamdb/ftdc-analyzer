@@ -898,6 +898,8 @@ export function MethodologyRules() {
 
   const load = useCallback(() => {
     setLoading(true);
+    // Methodology must fetch FRESH (it reloads after the operator edits overrides — the cached
+    // dump would return stale pre-override data). This is a separate tab, not the Inputs step.
     rulesetDump()
       .then((rs) => {
         setRuleset(rs);
