@@ -69,6 +69,34 @@ export interface RuleCategory {
   fire_threshold: number;
 }
 
+// ---- evidence-input registry (engine source of truth, mirrored to the wizard) ----
+export interface InputCollector {
+  command: string;
+  where: string;
+  role: string;
+  security_note: string;
+  doc: string;
+}
+
+export interface InputRegistryEntry {
+  id: string;
+  label: string;
+  format: "dir" | "json" | "text";
+  primary: boolean;
+  description: string;
+  unlocks: string[];
+  collector: InputCollector;
+  parser: string | null;
+  parseable: boolean;
+  cli_flag: string | null;
+}
+
+export interface InputRegistry {
+  version: number;
+  inputs: InputRegistryEntry[];
+  primary: string[];
+}
+
 export interface RulesetDump {
   version: number;
   families: string[];
@@ -76,6 +104,9 @@ export interface RulesetDump {
   categories: RuleCategory[];
   intents: IntentDef[];
   tier_tables?: Record<string, import("@/lib/sizing").TierTable>;
+  /** The evidence-input registry — drives the wizard slots, collector helpers, and the
+   *  "awaiting input — provide X" messages. Present from Phase 9 on. */
+  inputs_registry?: InputRegistry;
 }
 
 // ---- scored output (assessment_v2) ---------------------------------------
@@ -228,8 +259,15 @@ export const FAMILY_COLOR: Record<string, string> = {
   "Cross-Cutting": "#8AA0B6",
 };
 
-// Per-source unlock message for requires_input categories (mirrors chart scaffolding).
-export function unlockMessage(missing: string[]): string {
+// Per-source unlock message for requires_input categories. Registry-aware: names the exact
+// input(s) by their registry label when the registry is available (Phase 9), else falls back.
+export function unlockMessage(missing: string[], registry?: InputRegistry | null): string {
+  if (registry) {
+    const labels = missing.map(
+      (id) => registry.inputs.find((i) => i.id === id)?.label ?? id,
+    );
+    return `Data not available — provide ${labels.join(" + ")} to populate this.`;
+  }
   const set = new Set(missing);
   if (set.has("profiler")) {
     return "Data not available — upload the MongoDB slow-query log / profiler output to populate this.";
@@ -238,6 +276,12 @@ export function unlockMessage(missing: string[]): string {
     return "Data not available — upload the healthcheck snapshot (getMongoData.js output) to populate this.";
   }
   return `Data not available — provide ${missing.join(", ")} to populate this.`;
+}
+
+// Shared, prefetchable input-registry promise (derived from the same cached ruleset dump).
+export async function cachedInputRegistry(): Promise<InputRegistry | null> {
+  const dump = await cachedRulesetDump();
+  return dump.inputs_registry ?? null;
 }
 
 // Client-side re-lens of an already-scored assessment for a new intent — reorders +

@@ -20,14 +20,17 @@ import { Badge } from "@/components/ui/badge";
 import {
   type AssessmentV2,
   type CategoryResult,
+  type InputRegistry,
   type IntentDef,
   type LedgerRow,
   FAMILY_COLOR,
+  cachedInputRegistry,
   cachedRulesetDump,
   mergeIntents,
   relensAssessment,
   unlockMessage,
 } from "@/lib/ruleset";
+import { RegistryCollectorHelp } from "@/components/CollectorHelp";
 import { type LlmProvider, activeProvider, getLlmConfig } from "@/lib/llm";
 import { type NarrationResult, runNarration } from "@/lib/narration";
 import {
@@ -198,7 +201,8 @@ function ScoredCard({ r, focused }: { r: CategoryResult; focused?: boolean }) {
   );
 }
 
-function PlaceholderCard({ r }: { r: CategoryResult }) {
+function PlaceholderCard({ r, registry }: { r: CategoryResult; registry: InputRegistry | null }) {
+  const [showHelp, setShowHelp] = useState(false);
   const color = FAMILY_COLOR[r.family] ?? "#5A6E82";
   const isReq = r.status === "requires_input";
   const isProvided = r.status === "input_provided";
@@ -210,8 +214,12 @@ function PlaceholderCard({ r }: { r: CategoryResult }) {
   const text = isProvided
     ? `Input provided (${r.provided_inputs?.join(", ") || "file"}) — parsing & scoring in a later update. The file path is recorded for the future parser.`
     : isReq
-      ? unlockMessage(r.missing_inputs)
+      ? unlockMessage(r.missing_inputs, registry)
       : r.description;
+  // Collector entries for the specific input(s) this category is awaiting (Part 5).
+  const missingEntries = isReq && registry
+    ? r.missing_inputs.map((id) => registry.inputs.find((e) => e.id === id)).filter(Boolean)
+    : [];
   return (
     <Card className="overflow-hidden p-0 opacity-90">
       <div className="flex">
@@ -238,6 +246,24 @@ function PlaceholderCard({ r }: { r: CategoryResult }) {
             )}
           </div>
           <p className="text-xs text-muted-foreground">{r.context_fired ? r.context_note : text}</p>
+          {missingEntries.length > 0 && (
+            <div className="pt-1">
+              <button
+                onClick={() => setShowHelp((o) => !o)}
+                className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+              >
+                {showHelp ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+                How to get {missingEntries.map((e) => e!.label).join(" + ")}
+              </button>
+              {showHelp && (
+                <div className="mt-2 space-y-3">
+                  {missingEntries.map((e) => (
+                    <RegistryCollectorHelp key={e!.id} collector={e!.collector} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </Card>
@@ -422,12 +448,14 @@ function EvidenceGroup({
   results,
   kind,
   focusId,
+  registry,
 }: {
   label: string;
   color: string;
   results: CategoryResult[];
   kind: "scored" | "placeholder";
   focusId?: string | null;
+  registry?: InputRegistry | null;
 }) {
   if (!results.length) return null;
   return (
@@ -444,7 +472,7 @@ function EvidenceGroup({
       ) : (
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
           {results.map((r) => (
-            <PlaceholderCard key={r.id} r={r} />
+            <PlaceholderCard key={r.id} r={r} registry={registry ?? null} />
           ))}
         </div>
       )}
@@ -458,12 +486,14 @@ function EvidenceLayer({
   awaiting,
   declared,
   focusId,
+  registry,
 }: {
   fired: CategoryResult[];
   clear: CategoryResult[];
   awaiting: CategoryResult[];
   declared: CategoryResult[];
   focusId?: string | null;
+  registry?: InputRegistry | null;
 }) {
   const [open, setOpen] = useState(false);
   const total = fired.length + clear.length + awaiting.length + declared.length;
@@ -483,8 +513,8 @@ function EvidenceLayer({
         <div className="space-y-4">
           <EvidenceGroup label="Fired — drove the verdict" color="#00ED64" results={fired} kind="scored" focusId={focusId} />
           <EvidenceGroup label="Clear — scored, didn't fire" color="#8AA0B6" results={clear} kind="scored" focusId={focusId} />
-          <EvidenceGroup label="Awaiting input" color="#4DA6FF" results={awaiting} kind="placeholder" />
-          <EvidenceGroup label="Declared (stubs)" color="#5A6E82" results={declared} kind="placeholder" />
+          <EvidenceGroup label="Awaiting input" color="#4DA6FF" results={awaiting} kind="placeholder" registry={registry} />
+          <EvidenceGroup label="Declared (stubs)" color="#5A6E82" results={declared} kind="placeholder" registry={registry} />
         </div>
       )}
     </div>
@@ -551,9 +581,11 @@ export function AssessmentV2Panel({
   // Intent lens (multi-select), initialized to the run's chosen intents. Changing it
   // re-lenses the already-scored assessment in place (client-side; no re-decode).
   const [rsIntents, setRsIntents] = useState<IntentDef[]>([]);
+  const [inputRegistry, setInputRegistry] = useState<InputRegistry | null>(null);
   const [intentIds, setIntentIds] = useState<string[]>(() => initialIntentIds(v2));
   useEffect(() => {
     cachedRulesetDump().then((r) => setRsIntents(r.intents)).catch(() => {});
+    cachedInputRegistry().then(setInputRegistry).catch(() => {});
   }, []);
   // Re-initialize the lens whenever a different run is loaded.
   useEffect(() => {
@@ -635,7 +667,7 @@ export function AssessmentV2Panel({
       {extras}
 
       {/* LAYER 3 — Evidence (full detail, on demand) — the FINAL block on the tab. */}
-      <EvidenceLayer fired={fired} clear={clear} awaiting={awaiting} declared={declared} focusId={targetCategory} />
+      <EvidenceLayer fired={fired} clear={clear} awaiting={awaiting} declared={declared} focusId={targetCategory} registry={inputRegistry} />
     </div>
   );
 }

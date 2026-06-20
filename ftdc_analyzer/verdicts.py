@@ -18,6 +18,7 @@ from ftdc_analyzer import signatures
 from ftdc_analyzer import scorer as _scorer
 from ftdc_analyzer import sizing as _sizing
 from ftdc_analyzer import healthcheck as _healthcheck
+from ftdc_analyzer import inputs as _inputs
 from ftdc_analyzer.ruleset import build_ruleset as _build_ruleset
 from ftdc_analyzer.ruleset.overrides import load_overrides as _load_overrides
 
@@ -843,23 +844,35 @@ def build_facts(meta_doc, wt_cache_bytes=None, uptime_seconds=None):
 # ---------------------------------------------------------------------------
 # Assembly
 # ---------------------------------------------------------------------------
-def _enrich_structural(assessment_v2, hc_parsed):
-    """Merge healthcheck-derived dynamic recommendations + concrete evidence into the
-    scored Structural-Design categories (additive — does not alter scoring/ledgers)."""
-    structural = (hc_parsed or {}).get("structural") or {}
+def _apply_enrichers(assessment_v2, enrichers):
+    """Generalized post-score enrichment (registry-driven): merge a parser's dynamic
+    recommendation / concrete evidence / caveats into the matching category result. Replaces
+    the healthcheck-specific `_enrich_structural` and drives sh_status (sharding) + rs_status
+    (replication) the same way. Additive — never alters scoring/ledgers/confidence.
+
+    Each spec: {recommendation?, recommendation_flag?, evidence?, evidence_key?, caveats?,
+    note?, when_scored_only?}. With when_scored_only the healthcheck enrichers reproduce the
+    old _enrich_structural behavior exactly (scored-only, healthcheck_evidence key)."""
+    if not enrichers:
+        return
     for r in assessment_v2.get("ranked", []):
-        spec = structural.get(r.get("id"))
-        if not spec or r.get("status") != "scored":
-            continue
-        # Dynamic, number-explicit recommendation (drop list / reclaimable GB / anti-patterns).
-        if spec.get("recommendation") and not r.get("recommendation_conditioned"):
-            r["recommendation"] = spec["recommendation"]
-            r["recommendation_healthcheck"] = True
-        # Concrete evidence object for the UI (drop list, redundant pairs, flagged collections).
-        r["healthcheck_evidence"] = spec.get("evidence")
-        for cav in spec.get("caveats", []):
-            if cav not in r["caveats"]:
-                r["caveats"].append(cav)
+        for spec in enrichers.get(r.get("id"), []):
+            scored = r.get("status") == "scored"
+            if spec.get("when_scored_only") and not scored:
+                continue
+            ev = spec.get("evidence")
+            if ev is not None:
+                r[spec.get("evidence_key") or f"{r['id']}_evidence"] = ev
+            rec = spec.get("recommendation")
+            if rec and scored and not r.get("recommendation_conditioned"):
+                r["recommendation"] = rec
+                r[spec.get("recommendation_flag") or "recommendation_enriched"] = True
+            for cav in spec.get("caveats", []) or []:
+                if cav not in r.setdefault("caveats", []):
+                    r["caveats"].append(cav)
+            note = spec.get("note")
+            if note:
+                r.setdefault("enrichment_notes", []).append(note)
 
 
 _SHARDING_CONTEXT_NOTE = (
@@ -869,15 +882,13 @@ _SHARDING_CONTEXT_NOTE = (
     "sh.status() on a mongos and provide it for cluster-level analysis.")
 
 
-def _apply_sharding_context(assessment_v2, hc_parsed):
-    """When the healthcheck shows this node is a shard member (clusterRole=shardsvr), surface
-    the Sharding & Topology category as a fired *context* (an honest single-shard caveat +
-    direction) rather than a scored verdict — we do NOT have cluster-wide data. configsvr /
-    standalone / absent clusterRole → no-op (behaves as before). The actual sh.status() parser
-    is a later phase; this is the caveat-now step. Additive: does not change any score."""
-    if not hc_parsed:
-        return
-    topo = (hc_parsed.get("report") or {}).get("topology") or {}
+def _apply_sharding_context(assessment_v2, hc_report):
+    """When the healthcheck shows this node is a shard member (clusterRole=shardsvr) AND no
+    sh.status() was provided, surface Sharding & Topology as a fired *context* (the honest
+    single-shard caveat + 'provide sh.status()' direction) rather than a scored verdict. When
+    sh.status() IS provided the category scores instead — the caller skips this. configsvr /
+    standalone / absent clusterRole → no-op. Additive: does not change any score."""
+    topo = (hc_report or {}).get("topology") or {}
     role = str(topo.get("cluster_role") or "").lower()
     if "shardsvr" not in role:  # only a data shard; configsvr/standalone/none excluded
         return
@@ -897,50 +908,63 @@ def _apply_sharding_context(assessment_v2, hc_parsed):
 
 
 def _assemble_assessment(sig_stats, ruleset, available_inputs, provided_inputs,
-                         target_category, intent, hc_parsed,
-                         provided_healthcheck, provided_profiler):
-    """Run the scorer, enrich structural categories from the healthcheck, and record the
-    supplied file paths. Shared by the FTDC and healthcheck-only assemblers."""
+                         target_category, intent, enrichers, hc_report_for_context,
+                         provided_paths):
+    """Run the scorer, apply registry-dispatched enrichers, layer the sharding context (only
+    when sh.status() is absent), and record the supplied file paths. Shared by both assemblers."""
     assessment_v2 = _scorer.score(sig_stats, available_inputs, ruleset,
                                   target_category=target_category, intent=intent,
                                   provided_inputs=provided_inputs)
-    if hc_parsed:
-        _enrich_structural(assessment_v2, hc_parsed)
-        _apply_sharding_context(assessment_v2, hc_parsed)
-    assessment_v2["provided_paths"] = {
-        k: v for k, v in (("healthcheck", provided_healthcheck),
-                          ("profiler", provided_profiler)) if v
-    }
+    _apply_enrichers(assessment_v2, enrichers)
+    # The sharding context is the fallback when sh.status() was NOT provided; when it WAS,
+    # sharding_topology scores from sh_* signals and no context caveat is layered on.
+    if "sh_status" not in available_inputs and hc_report_for_context is not None:
+        _apply_sharding_context(assessment_v2, hc_report_for_context)
+    assessment_v2["provided_paths"] = dict(provided_paths)
     return assessment_v2
 
 
 def build_results_healthcheck_only(healthcheck_path, target_category=None,
                                    ruleset_overrides_path=None, intent=None,
-                                   provided_profiler=None, cloud="aws"):
+                                   provided_profiler=None, cloud="aws",
+                                   provided_sh_status=None, provided_rs_status=None):
     """Assemble a results dict from a healthcheck snapshot ALONE (no FTDC capture).
 
-    Produces the healthcheck block, the scored Structural-Design categories, and a sizing
-    recommendation from the healthcheck host/storage facts. Time-series-dependent surfaces
-    (charts / signals / verdicts) are intentionally empty and marked unavailable — there is
-    no FTDC capture to derive them from. Decoder untouched (never imported here)."""
-    hc = _healthcheck.parse_healthcheck(healthcheck_path)
+    Healthcheck is the primary; any accompanying evidence inputs (sh.status / rs.status) flow
+    through the registry dispatcher. Produces the healthcheck block, the scored Structural-
+    Design categories (+ sharding when sh.status present), and a sizing recommendation. Time-
+    series surfaces (charts/signals/verdicts) are intentionally empty. Decoder untouched."""
     now = datetime.datetime.now(datetime.timezone.utc)
-    host_facts = hc["host"]
+
+    # Dispatch the healthcheck (primary) + any evidence inputs through the registry.
+    provided = {"healthcheck": healthcheck_path}
+    if provided_sh_status:
+        provided["sh_status"] = provided_sh_status
+    if provided_rs_status:
+        provided["rs_status"] = provided_rs_status
+    dr = _inputs.dispatch(provided)
+    hc_raw = (dr.parsed.get("healthcheck") or {}).get("_raw")
+    if not hc_raw:  # healthcheck is the primary — it must parse
+        raise ValueError("healthcheck snapshot could not be parsed: " + "; ".join(dr.notes))
+    host_facts = hc_raw["host"]
 
     overrides_path = ruleset_overrides_path or os.environ.get("FTDC_RULESET_OVERRIDES")
     ruleset = _build_ruleset(overrides_path)
 
-    # Healthcheck is AVAILABLE for scoring (structural categories score); profiler stays
-    # intake-only; FTDC is absent → capacity/incident categories show requires_input(ftdc).
-    sig_stats = dict(hc["scoring_stats"])
-    available_inputs = {"healthcheck"}
+    # Parsed inputs are AVAILABLE for scoring; profiler stays intake-only; FTDC is absent →
+    # capacity/incident categories show requires_input(ftdc).
+    sig_stats = dict(dr.sig_stats)
+    available_inputs = set(dr.available)
     provided_inputs = set()
     if provided_profiler:
         provided_inputs.add("profiler")
+    provided_paths = {k: v for k, v in (
+        ("healthcheck", healthcheck_path), ("profiler", provided_profiler),
+        ("sh_status", provided_sh_status), ("rs_status", provided_rs_status)) if v}
 
     assessment_v2 = _assemble_assessment(
         sig_stats, ruleset, available_inputs, provided_inputs, target_category, intent,
-        hc, healthcheck_path, provided_profiler)
+        dr.enrichers, dr.reports.get("healthcheck"), provided_paths)
     assessment_v2["overrides_applied"] = bool(
         overrides_path and os.path.exists(overrides_path)) if overrides_path else False
 
@@ -948,7 +972,7 @@ def build_results_healthcheck_only(healthcheck_path, target_category=None,
     sizing_recommendation = _sizing.build_sizing_recommendation(
         host_facts.get("num_cores"), host_facts.get("mem_mb"), sig_stats,
         assessment_v2["ranked"], cloud, _tier_tables, provided_inputs, intent,
-        healthcheck=hc["sizing"])
+        healthcheck=dr.sizing)
 
     notes = [
         "Healthcheck-only run: no FTDC capture was provided, so time-series charts, the "
@@ -956,7 +980,7 @@ def build_results_healthcheck_only(healthcheck_path, target_category=None,
         "FTDC diagnostic.data capture to unlock capacity / incident time-series analysis.",
         "Structural-Design categories (index health, schema, storage) and the storage/cache "
         "sizing are fully scored from the healthcheck snapshot.",
-    ] + list(hc.get("notes") or [])
+    ] + list(dr.notes)  # dispatcher notes already include the healthcheck parser's own notes
 
     return {
         "schema_version": 3,
@@ -974,12 +998,16 @@ def build_results_healthcheck_only(healthcheck_path, target_category=None,
         "capture": {"first_ts_iso": None, "last_ts_iso": None,
                     "span_seconds": 0, "samples": 0},
         "data_sources": {"ftdc": False, "healthcheck": True,
-                         "profiler": bool(provided_profiler)},
+                         "profiler": bool(provided_profiler),
+                         "sh_status": "sh_status" in dr.available,
+                         "rs_status": "rs_status" in dr.available},
         "signals": {},
         "assessment": None,
         "assessment_v2": assessment_v2,
         "sizing_recommendation": sizing_recommendation,
-        "healthcheck": hc["report"],
+        "healthcheck": dr.reports.get("healthcheck"),
+        "sharding": dr.reports.get("sharding"),
+        "replication": dr.reports.get("replication"),
         "verdicts": None,
         "cost_optimization": None,
         "insights": [],
@@ -995,7 +1023,7 @@ def build_results_healthcheck_only(healthcheck_path, target_category=None,
 def build_results(dirpath, on_skip=None, target_category=None,
                   ruleset_overrides_path=None, intent=None,
                   provided_healthcheck=None, provided_profiler=None,
-                  cloud="aws"):
+                  cloud="aws", provided_sh_status=None, provided_rs_status=None):
     ex = metrics.extract(dirpath, on_skip=on_skip)
     sig, n = metrics.derive(ex)
     ts = ex["ts"]
@@ -1118,43 +1146,44 @@ def build_results(dirpath, on_skip=None, target_category=None,
     cost_optimization = build_cost_optimization(verdicts)
     assessment = signatures.build_assessment(sig_stats, insights, cost_optimization)
 
-    # --- Healthcheck (CO-PRIMARY input): parse + score the structural categories ---
-    # When a healthcheck snapshot is supplied it becomes an AVAILABLE scoring input (not
-    # merely intake): its derived stats are injected into sig_stats so the Structural-Design
-    # categories produce real verdicts, and its facts feed the sizing engine + report.
-    hc_parsed = None
-    healthcheck_block = None
-    if provided_healthcheck:
-        try:
-            hc_parsed = _healthcheck.parse_healthcheck(provided_healthcheck)
-            sig_stats.update(hc_parsed["scoring_stats"])
-            healthcheck_block = hc_parsed["report"]
-        except Exception as e:  # noqa: BLE001 — a bad healthcheck must not fail the FTDC run
-            notes.append(f"healthcheck snapshot could not be parsed ({type(e).__name__}: {e}); "
-                         "FTDC analysis proceeded without it.")
+    # --- Evidence inputs (registry-dispatched): healthcheck + sh.status / rs.status ---
+    # Each supplied evidence file is routed to its registered parser; the resulting `*_`
+    # signals are injected into sig_stats (so the matching categories score), the report
+    # blocks are stored, and the dynamic recommendations/evidence enrich the scored results —
+    # the same pattern healthcheck used, now generalized. A bad evidence file never fails the
+    # FTDC run (the dispatcher records a note and skips it).
+    provided = {k: v for k, v in (
+        ("healthcheck", provided_healthcheck), ("sh_status", provided_sh_status),
+        ("rs_status", provided_rs_status)) if v}
+    dr = _inputs.dispatch(provided)
+    sig_stats.update(dr.sig_stats)
+    healthcheck_block = dr.reports.get("healthcheck")
+    notes.extend(dr.notes)
 
     # --- Layer-2 deterministic scorer (assessment_v2) ---
     # Defaults merged with operator overrides (CLI path arg or FTDC_RULESET_OVERRIDES env).
     overrides_path = ruleset_overrides_path or os.environ.get("FTDC_RULESET_OVERRIDES")
     ruleset = _build_ruleset(overrides_path)
-    available_inputs = {"ftdc"}
+    available_inputs = {"ftdc"} | set(dr.available)
     provided_inputs = set()
-    if hc_parsed:
-        available_inputs.add("healthcheck")  # scored, not just provided
-    elif provided_healthcheck:
-        provided_inputs.add("healthcheck")   # supplied but unparsed → input_provided
+    # healthcheck supplied but unparsed → input_provided (intake state, not scored)
+    if provided_healthcheck and "healthcheck" not in dr.available:
+        provided_inputs.add("healthcheck")
     if provided_profiler:
         provided_inputs.add("profiler")
+    provided_paths = {k: v for k, v in (
+        ("healthcheck", provided_healthcheck), ("profiler", provided_profiler),
+        ("sh_status", provided_sh_status), ("rs_status", provided_rs_status)) if v}
     assessment_v2 = _assemble_assessment(
         sig_stats, ruleset, available_inputs, provided_inputs, target_category, intent,
-        hc_parsed, provided_healthcheck, provided_profiler)
+        dr.enrichers, dr.reports.get("healthcheck"), provided_paths)
 
     # --- Sizing Recommendation (capacity → Atlas tiers; surfaced for sizing/cost intents) ---
     _tier_tables = _sizing.load_tier_tables(_load_overrides(overrides_path))
     sizing_recommendation = _sizing.build_sizing_recommendation(
         meta.get("numCores"), meta.get("memSizeMB"), sig_stats,
         assessment_v2["ranked"], cloud, _tier_tables, provided_inputs, intent,
-        healthcheck=(hc_parsed or {}).get("sizing"))
+        healthcheck=dr.sizing)
     assessment_v2["overrides_applied"] = bool(overrides_path and
                                               os.path.exists(overrides_path)) \
         if overrides_path else False
@@ -1171,12 +1200,16 @@ def build_results(dirpath, on_skip=None, target_category=None,
         "capture": {"first_ts_iso": first_iso, "last_ts_iso": last_iso,
                     "span_seconds": span_seconds, "samples": n},
         "data_sources": {"ftdc": True, "healthcheck": bool(healthcheck_block),
-                         "profiler": bool(provided_profiler)},
+                         "profiler": bool(provided_profiler),
+                         "sh_status": "sh_status" in dr.available,
+                         "rs_status": "rs_status" in dr.available},
         "signals": signals_block,
         "assessment": assessment,
         "assessment_v2": assessment_v2,
         "sizing_recommendation": sizing_recommendation,
         "healthcheck": healthcheck_block,
+        "sharding": dr.reports.get("sharding"),
+        "replication": dr.reports.get("replication"),
         "verdicts": verdicts,
         "cost_optimization": cost_optimization,
         "insights": insights,

@@ -347,6 +347,9 @@ export default function App() {
   });
   const [healthcheckPath, setHealthcheckPath] = useState<string | null>(null);
   const [profilerPath, setProfilerPath] = useState<string | null>(null);
+  // Phase-9 evidence inputs (registry-driven). New inputs slot in here without bespoke state.
+  const [shStatusPath, setShStatusPath] = useState<string | null>(null);
+  const [rsStatusPath, setRsStatusPath] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null); // LLM model for narration
   const [cloud, setCloud] = useState<string>(() => {
     try {
@@ -482,6 +485,30 @@ export default function App() {
     }
   }
 
+  // Registry-driven input plumbing: one (value, setter) per input id so the wizard slots and
+  // the source-bar chips read/write generically (FTDC is the dir picker; all else are files).
+  const inputSetters: Record<string, (p: string | null) => void> = {
+    ftdc: setSelectedPath,
+    healthcheck: setHealthcheckPath,
+    profiler: setProfilerPath,
+    sh_status: setShStatusPath,
+    rs_status: setRsStatusPath,
+  };
+  const inputValues: Record<string, string | null> = {
+    ftdc: selectedPath,
+    healthcheck: healthcheckPath,
+    profiler: profilerPath,
+    sh_status: shStatusPath,
+    rs_status: rsStatusPath,
+  };
+  function onPickInput(id: string, label: string) {
+    if (id === "ftdc") pickFolder();
+    else pickFile(`Select ${label}`, (p) => inputSetters[id]?.(p));
+  }
+  function onClearInput(id: string) {
+    inputSetters[id]?.(null);
+  }
+
   async function analyze() {
     if (!selectedPath && !healthcheckPath) {
       toast.error("Provide an FTDC folder or a healthcheck snapshot first.");
@@ -498,6 +525,8 @@ export default function App() {
         intent: intent,
         healthcheck: healthcheckPath,
         profiler: profilerPath,
+        shStatus: shStatusPath,
+        rsStatus: rsStatusPath,
         cloud: cloud,
       });
       // The pre-flight configured an assessment intent + mode → opt in to the panel.
@@ -528,6 +557,8 @@ export default function App() {
         healthcheck: healthcheckPath,
         profiler: profilerPath,
         cloud,
+        sh_status: shStatusPath,
+        rs_status: rsStatusPath,
       });
     } catch (e) {
       setGameOpen(false); // surface the error on the landing screen
@@ -579,6 +610,8 @@ export default function App() {
       healthcheck: healthcheckPath,
       profiler: profilerPath,
       cloud,
+      sh_status: shStatusPath,
+      rs_status: rsStatusPath,
     };
     const plan = classifyRun(baseline, cur);
     setGenerateAssessment(true);
@@ -604,6 +637,8 @@ export default function App() {
       healthcheck: snap?.healthcheck ?? null,
       profiler: snap?.profiler ?? null,
       cloud: snap?.cloud ?? "aws",
+      sh_status: snap?.sh_status ?? null,
+      rs_status: snap?.rs_status ?? null,
       cache_dir: entry.cache_dir,
       hostname: entry.hostname,
     };
@@ -612,6 +647,8 @@ export default function App() {
     setAssessmentMode(baseline.mode);
     setHealthcheckPath(baseline.healthcheck);
     setProfilerPath(baseline.profiler);
+    setShStatusPath(baseline.sh_status ?? null);
+    setRsStatusPath(baseline.rs_status ?? null);
     setModel(baseline.model);
     setCloud(baseline.cloud);
     if (baseline.model) {
@@ -672,19 +709,9 @@ export default function App() {
           username={username}
           analyzing={analyzing}
           error={error}
-          selectedPath={selectedPath}
-          onPick={pickFolder}
-          onClearFtdc={() => setSelectedPath(null)}
-          healthcheckPath={healthcheckPath}
-          onPickHealthcheck={() =>
-            pickFile("Select a healthcheck snapshot (getMongoData.js output)", setHealthcheckPath)
-          }
-          onClearHealthcheck={() => setHealthcheckPath(null)}
-          profilerPath={profilerPath}
-          onPickProfiler={() =>
-            pickFile("Select a profiler / slow-query log file", setProfilerPath)
-          }
-          onClearProfiler={() => setProfilerPath(null)}
+          inputValues={inputValues}
+          onPickInput={onPickInput}
+          onClearInput={onClearInput}
           intent={intent}
           onIntentChange={setIntent}
           cloud={cloud}
@@ -818,26 +845,18 @@ export default function App() {
               </button>
             )}
           </span>
-          {/* Healthcheck / profiler input chips with a clear control (co-primary inputs). */}
-          {healthcheckPath && (
-            <span className="flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
-              <FileText className="size-3" /> healthcheck
-              <button onClick={() => setHealthcheckPath(null)} disabled={analyzing}
-                      title="Clear the healthcheck snapshot"
-                      className="text-muted-foreground hover:text-destructive">
-                <X className="size-3" />
-              </button>
-            </span>
-          )}
-          {profilerPath && (
-            <span className="flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
-              <FileText className="size-3" /> profiler
-              <button onClick={() => setProfilerPath(null)} disabled={analyzing}
-                      title="Clear the profiler log"
-                      className="text-muted-foreground hover:text-destructive">
-                <X className="size-3" />
-              </button>
-            </span>
+          {/* Evidence input chips with a clear control (registry-driven; co-primary inputs). */}
+          {(["healthcheck", "profiler", "sh_status", "rs_status"] as const).map((id) =>
+            inputValues[id] ? (
+              <span key={id} className="flex items-center gap-1 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-muted-foreground">
+                <FileText className="size-3" /> {id.replace("_", "·")}
+                <button onClick={() => onClearInput(id)} disabled={analyzing}
+                        title={`Clear ${id}`}
+                        className="text-muted-foreground hover:text-destructive">
+                  <X className="size-3" />
+                </button>
+              </span>
+            ) : null,
           )}
           <Button size="sm" className="h-8 gap-2 text-xs" onClick={analyze}
                   disabled={analyzing || (!selectedPath && !healthcheckPath)}

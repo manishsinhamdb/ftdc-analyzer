@@ -397,7 +397,48 @@ def _storage_capacity_design() -> Category:
 
 
 # ---------------------------------------------------------------------------
-# STUB categories (8) — declared + wired, not yet deep
+# DEEP sharding category (sh_status-scored). Signals read the `sh_*` stats injected by
+# ftdc_analyzer.inputs.sh_status; required_inputs=["sh_status"] so it scores when sh.status()
+# is provided and shows requires_input(sh_status) otherwise. The concrete chunk-distribution /
+# jumbo / balancer evidence + a generated recommendation are merged post-scoring (verdicts.py).
+# ---------------------------------------------------------------------------
+def _sharding_topology() -> Category:
+    return Category(
+        id="sharding_topology",
+        name="Sharding & Topology",
+        family="Cluster-Context",
+        description=(
+            "Sharded-cluster health from sh.status(): chunk-distribution balance across shards, "
+            "balancer state, jumbo chunks, and sharded-vs-unsharded collections — the cluster-"
+            "wide view single-host FTDC cannot provide."),
+        required_inputs=["sh_status"],
+        signals=[
+            _S("sh_chunk_imbalance_pct", 0.40, "+", ">", 30, "p95", unit="%",
+               interpretation="Chunk distribution is imbalanced across shards (worst collection's "
+                              "hottest shard holds far more than an even share)."),
+            _S("sh_balancer_inactive", 0.30, "+", ">", 0, "p95", unit="0/1",
+               interpretation="Balancer is enabled but not running, or has failed recent rounds "
+                              "— imbalance will not self-correct."),
+            _S("sh_jumbo_chunks", 0.30, "+", ">", 0, "p95", unit="chunks",
+               interpretation="Jumbo chunks present — too large to auto-split/migrate; they pin "
+                              "data to one shard and defeat balancing."),
+        ],
+        caveats=[
+            "sh.status() shows chunk COUNTS, not per-chunk data size — a balanced chunk count "
+            "can still hide data/throughput skew.",
+            "Shard-key effectiveness (cardinality, hotspotting, monotonic keys) needs the query "
+            "profiler + access patterns, which sh.status() alone does not expose.",
+            "Point-in-time mongos view — balancer state and chunk counts fluctuate.",
+        ],
+        recommendation=(
+            "Review chunk distribution, jumbo chunks and balancer health from sh.status(). "
+            "(Concrete per-collection chunk balance is attached when sh.status() is loaded.)"),
+        fire_threshold=0.5,
+    )
+
+
+# ---------------------------------------------------------------------------
+# STUB categories (7) — declared + wired, not yet deep
 # ---------------------------------------------------------------------------
 def _stub(cid, name, family, description, required_inputs, caveats,
           recommendation, signals=None, conditioned_by=None,
@@ -454,16 +495,9 @@ def _stub_categories():
               "and cmdline metadata).", ["ftdc"],
               ["Version EOL is read from buildInfo; configuration-risk depth is planned."],
               "Plan an upgrade path off EOL releases; review risky config flags."),
-        _stub("sharding_topology", "Sharding & Topology", "Cluster-Context",
-              "Surfaces sharded-cluster context (stale-config churn, balancer signals) and "
-              "the limits of single-host FTDC for cluster-wide conclusions.", ["ftdc"],
-              ["FTDC covers only the analyzed host; cluster-wide behaviour may originate "
-               "elsewhere (mongos/config servers)."],
-              "Correlate stale-config churn with balancer activity across shard members.",
-              signals=[
-                  _S("stale_config_errors_ps", 1.0, "+", ">", 0, "p95", status="stub",
-                     interpretation="Stale-config errors (routing/metadata churn)."),
-              ]),
+        # sharding_topology is now DEEP and sh_status-scored — see _sharding_topology()
+        # below; added in build_default_ruleset(). (Absent sh.status() → requires_input,
+        # which the Phase-8 healthcheck context caveat layers onto when clusterRole=shardsvr.)
         # Structural-Design categories (index_health_bloat / schema_datamodel /
         # storage_capacity_design) are now DEEP and healthcheck-scored — see the
         # `_index_health_bloat()` / `_schema_datamodel()` / `_storage_capacity_design()`
@@ -611,6 +645,7 @@ def build_default_ruleset() -> Ruleset:
         _index_health_bloat(),
         _schema_datamodel(),
         _storage_capacity_design(),
+        _sharding_topology(),
     ]
     categories.extend(_stub_categories())
     return Ruleset(version=RULESET_VERSION, categories=categories,

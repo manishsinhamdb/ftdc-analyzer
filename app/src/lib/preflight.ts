@@ -14,6 +14,9 @@ export interface Selections {
   healthcheck: string | null;
   profiler: string | null;
   cloud: string;
+  // Phase-9 evidence inputs (optional; older snapshots omit them).
+  sh_status?: string | null;
+  rs_status?: string | null;
 }
 
 export interface Baseline extends Selections {
@@ -45,7 +48,9 @@ export function classifyRun(baseline: Baseline | null, cur: Selections): RunPlan
   if (
     cur.ftdc !== baseline.ftdc ||
     cur.healthcheck !== baseline.healthcheck ||
-    cur.profiler !== baseline.profiler
+    cur.profiler !== baseline.profiler ||
+    (cur.sh_status ?? null) !== (baseline.sh_status ?? null) ||
+    (cur.rs_status ?? null) !== (baseline.rs_status ?? null)
   ) {
     return {
       action: "reanalyze",

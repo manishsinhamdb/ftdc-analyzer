@@ -106,6 +106,10 @@ def main(argv=None):
                         help="path to a healthcheck snapshot (intake only; parsing is future)")
     parser.add_argument("--profiler", metavar="FILE", default=None,
                         help="path to a profiler / slow-query log (intake only; parsing is future)")
+    parser.add_argument("--sh-status", metavar="FILE", default=None,
+                        help="path to sh.status() JSON (sharding topology/state — scores Sharding)")
+    parser.add_argument("--rs-status", metavar="FILE", default=None,
+                        help="path to rs.status() JSON (replication detail — measured member lag)")
     parser.add_argument("--cloud", metavar="NAME", default="aws",
                         choices=["aws", "gcp", "azure"],
                         help="cloud provider for the sizing tier table (default aws)")
@@ -160,9 +164,13 @@ def main(argv=None):
         from ftdc_analyzer.ruleset.overrides import load_overrides
         from ftdc_analyzer import sizing
         ov_path = args.ruleset_overrides or os.environ.get("FTDC_RULESET_OVERRIDES")
+        from ftdc_analyzer import inputs as _inputs
         rs = build_ruleset(ov_path)
         dump = rs.to_dict()
         dump["tier_tables"] = sizing.load_tier_tables(load_overrides(ov_path))
+        # The evidence-input registry — the UI's source of truth for wizard slots, collector
+        # helpers, unlocks, and the "awaiting input — provide X" messages.
+        dump["inputs_registry"] = _inputs.registry_to_dict()
         sys.stdout.write(json.dumps(dump, indent=2))
         sys.stdout.write("\n")
         return 0
@@ -184,7 +192,8 @@ def main(argv=None):
             results = verdicts.build_results_healthcheck_only(
                 hc_path, target_category=args.target_category,
                 ruleset_overrides_path=args.ruleset_overrides, intent=args.intent,
-                provided_profiler=args.profiler, cloud=args.cloud)
+                provided_profiler=args.profiler, cloud=args.cloud,
+                provided_sh_status=args.sh_status, provided_rs_status=args.rs_status)
         except Exception as e:  # noqa: BLE001
             rl.add(f"FAILED: {type(e).__name__}: {e}")
             rl.write()
@@ -276,6 +285,8 @@ def main(argv=None):
             intent=args.intent,
             provided_healthcheck=args.healthcheck,
             provided_profiler=args.profiler,
+            provided_sh_status=args.sh_status,
+            provided_rs_status=args.rs_status,
             cloud=args.cloud)
         metrics_full = None
         if args.out_dir:

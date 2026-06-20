@@ -21,9 +21,14 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { type RunHistoryEntry, historyEntryLabels } from "@/lib/ftdc";
-import { type IntentDef, cachedRulesetDump } from "@/lib/ruleset";
+import {
+  type IntentDef,
+  type InputRegistryEntry,
+  cachedInputRegistry,
+  cachedRulesetDump,
+} from "@/lib/ruleset";
 import { type AssessmentMode, IntentPicker, ModelPicker } from "@/components/AssessmentControls";
-import { HealthcheckHelp, ProfilerHelp } from "@/components/CollectorHelp";
+import { RegistryCollectorHelp } from "@/components/CollectorHelp";
 import { type Baseline, classifyRun } from "@/lib/preflight";
 import { CLOUDS } from "@/lib/sizing";
 
@@ -33,15 +38,9 @@ interface Props {
   username: string;
   analyzing: boolean;
   error: string | null;
-  selectedPath: string | null;
-  onPick: () => void;
-  onClearFtdc: () => void;
-  healthcheckPath: string | null;
-  onPickHealthcheck: () => void;
-  onClearHealthcheck: () => void;
-  profilerPath: string | null;
-  onPickProfiler: () => void;
-  onClearProfiler: () => void;
+  inputValues: Record<string, string | null>;
+  onPickInput: (id: string, label: string) => void;
+  onClearInput: (id: string) => void;
   intent: string | null;
   onIntentChange: (id: string) => void;
   cloud: string;
@@ -199,15 +198,9 @@ export function Landing(props: Props) {
     username,
     analyzing,
     error,
-    selectedPath,
-    onPick,
-    onClearFtdc,
-    healthcheckPath,
-    onPickHealthcheck,
-    onClearHealthcheck,
-    profilerPath,
-    onPickProfiler,
-    onClearProfiler,
+    inputValues,
+    onPickInput,
+    onClearInput,
     intent,
     onIntentChange,
     cloud,
@@ -229,22 +222,32 @@ export function Landing(props: Props) {
   const [baseline, setBaseline] = useState<Baseline | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [intents, setIntents] = useState<IntentDef[]>([]);
+  const [inputReg, setInputReg] = useState<InputRegistryEntry[]>([]);
 
   useEffect(() => {
     cachedRulesetDump()
       .then((rs) => setIntents(rs.intents))
       .catch(() => {});
+    cachedInputRegistry()
+      .then((r) => r && setInputReg(r.inputs))
+      .catch(() => {});
   }, []);
 
-  // Inputs actually provided drive the intent lock-flags (an intent needing FTDC shows
-  // "needs FTDC" on a healthcheck-only run, and vice-versa).
-  const provided = new Set<string>();
-  if (selectedPath) provided.add("ftdc");
-  if (healthcheckPath) provided.add("healthcheck");
-  if (profilerPath) provided.add("profiler");
+  // Read current input paths from the registry-keyed value map.
+  const selectedPath = inputValues.ftdc ?? null;
+  const healthcheckPath = inputValues.healthcheck ?? null;
+  const primaryInputs = inputReg.filter((e) => e.primary);
+  const evidenceInputs = inputReg.filter((e) => !e.primary);
 
-  // Co-primary: at least one of FTDC or healthcheck enables the run.
-  const hasAnyInput = !!selectedPath || !!healthcheckPath;
+  // Inputs actually provided drive the intent lock-flags (a category's "awaiting input" names
+  // the specific registry input that unlocks it).
+  const provided = new Set<string>();
+  for (const e of inputReg) if (inputValues[e.id]) provided.add(e.id);
+
+  // Co-primary: at least one PRIMARY input enables the run.
+  const hasAnyInput = primaryInputs.length
+    ? primaryInputs.some((e) => inputValues[e.id])
+    : !!selectedPath || !!healthcheckPath;
   const canNext = step === 1 ? hasAnyInput : step === 2 ? !!intent : true;
   const plan = classifyRun(phase === "wizard" && baseline ? baseline : null, {
     ftdc: selectedPath,
@@ -252,8 +255,10 @@ export function Landing(props: Props) {
     mode: assessmentMode,
     model,
     healthcheck: healthcheckPath,
-    profiler: profilerPath,
+    profiler: inputValues.profiler ?? null,
     cloud,
+    sh_status: inputValues.sh_status ?? null,
+    rs_status: inputValues.rs_status ?? null,
   });
   const intentIds = (intent ?? "").split(",").filter(Boolean);
   const selectedIntents = intentIds
@@ -426,39 +431,47 @@ export function Landing(props: Props) {
             <Progress step={step} onJump={setStep} />
 
             <div key={step} className="space-y-4 duration-200 animate-in fade-in slide-in-from-right-2">
-              {/* Step 1 — Inputs */}
+              {/* Step 1 — Inputs (rendered from the evidence-input registry) */}
               {step === 1 && (
                 <section className="space-y-2">
-                  <h2 className="text-sm font-semibold">Step 1 · Inputs <span className="font-normal text-muted-foreground">— provide at least one primary input (FTDC or healthcheck)</span></h2>
-                  <InputSlot
-                    icon={<Database className="size-4" />}
-                    title="FTDC diagnostic.data"
-                    badge="primary"
-                    path={selectedPath}
-                    unlocks="Time-series: capacity / incident analysis, charts, signals."
-                    onPick={onPick}
-                    onClear={onClearFtdc}
-                  />
-                  <InputSlot
-                    icon={<FileText className="size-4" />}
-                    title="Healthcheck snapshot (getMongoData)"
-                    badge="primary"
-                    path={healthcheckPath}
-                    unlocks="Structural: index health, schema & storage design, real sizing storage + the Healthcheck Report."
-                    onPick={onPickHealthcheck}
-                    onClear={onClearHealthcheck}
-                    help={<HealthcheckHelp />}
-                  />
-                  <InputSlot
-                    icon={<FileText className="size-4" />}
-                    title="Query profiler / slow-query log"
-                    badge="optional"
-                    path={profilerPath}
-                    unlocks="Unlocks query-targeting, index recommendations & slow-query hotspots."
-                    onPick={onPickProfiler}
-                    onClear={onClearProfiler}
-                    help={<ProfilerHelp />}
-                  />
+                  <h2 className="text-sm font-semibold">Step 1 · Inputs <span className="font-normal text-muted-foreground">— provide at least one primary input</span></h2>
+                  {inputReg.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Loading input types…</p>
+                  ) : (
+                    <>
+                      {primaryInputs.map((e) => (
+                        <InputSlot
+                          key={e.id}
+                          icon={e.id === "ftdc" ? <Database className="size-4" /> : <FileText className="size-4" />}
+                          title={e.label}
+                          badge="primary"
+                          path={inputValues[e.id] ?? null}
+                          unlocks={e.description}
+                          onPick={() => onPickInput(e.id, e.label)}
+                          onClear={() => onClearInput(e.id)}
+                          help={e.id === "ftdc" ? undefined : <RegistryCollectorHelp collector={e.collector} />}
+                        />
+                      ))}
+                      {evidenceInputs.length > 0 && (
+                        <div className="pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Optional evidence — sharpens specific categories
+                        </div>
+                      )}
+                      {evidenceInputs.map((e) => (
+                        <InputSlot
+                          key={e.id}
+                          icon={<FileText className="size-4" />}
+                          title={e.label}
+                          badge="optional"
+                          path={inputValues[e.id] ?? null}
+                          unlocks={e.description}
+                          onPick={() => onPickInput(e.id, e.label)}
+                          onClear={() => onClearInput(e.id)}
+                          help={<RegistryCollectorHelp collector={e.collector} />}
+                        />
+                      ))}
+                    </>
+                  )}
                   {!selectedPath && healthcheckPath && (
                     <p className="rounded-md border border-border bg-secondary/20 px-3 py-2 text-[11px] text-muted-foreground">
                       Healthcheck-only run: structural scoring, sizing and the Healthcheck Report
@@ -548,8 +561,11 @@ export function Landing(props: Props) {
                       muted={!selectedPath}
                       onEdit={() => setStep(1)}
                     />
-                    {healthcheckPath && <SummaryRow label="Healthcheck snapshot" value={healthcheckPath} muted onEdit={() => setStep(1)} />}
-                    {profilerPath && <SummaryRow label="Profiler / slow-query log" value={profilerPath} muted onEdit={() => setStep(1)} />}
+                    {inputReg
+                      .filter((e) => e.id !== "ftdc" && inputValues[e.id])
+                      .map((e) => (
+                        <SummaryRow key={e.id} label={e.label} value={inputValues[e.id] as string} muted onEdit={() => setStep(1)} />
+                      ))}
                     <SummaryRow
                       label={selectedIntents.length > 1 ? "Assessment intents (union)" : "Assessment intent"}
                       value={

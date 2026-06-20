@@ -25,7 +25,7 @@ FAMILIES = [
 ]
 
 # Data sources a category can require.
-INPUTS = ["ftdc", "healthcheck", "profiler"]
+INPUTS = ["ftdc", "healthcheck", "profiler", "sh_status", "rs_status"]
 
 # Valid comparators for thresholds / disambiguators.
 COMPARATORS = [">", ">=", "<", "<=", "==", "!="]

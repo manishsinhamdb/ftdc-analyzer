@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Check, Copy, ShieldAlert } from "lucide-react";
+import { Check, Copy, MapPin, ShieldAlert, ShieldCheck } from "lucide-react";
+import type { InputCollector } from "@/lib/ruleset";
 
 // Small copyable code block.
 function CodeBlock({ code, label }: { code: string; label?: string }) {
@@ -33,6 +34,23 @@ function SecurityNote({ children }: { children: React.ReactNode }) {
     <div className="flex items-start gap-1.5 rounded-md border border-[#F5A623]/30 bg-[#F5A623]/5 px-2.5 py-1.5 text-[11px] text-muted-foreground">
       <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-[#F5A623]" />
       <span>{children}</span>
+    </div>
+  );
+}
+
+// Generic, registry-driven collector helper — renders ANY input's collector (command + where
+// + least-priv role + security note) straight from the engine's input registry. Used by the
+// wizard slots and the Assessment "awaiting input" cards so both read from one source.
+export function RegistryCollectorHelp({ collector }: { collector: InputCollector }) {
+  return (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        <span className="flex items-center gap-1"><MapPin className="size-3.5 text-primary" /> {collector.where}</span>
+        <span className="flex items-center gap-1"><ShieldCheck className="size-3.5 text-primary" /> role: {collector.role}</span>
+      </div>
+      <CodeBlock label="Run" code={collector.command} />
+      {collector.doc && <p className="text-[11px] leading-snug text-muted-foreground">{collector.doc}</p>}
+      <SecurityNote>{collector.security_note}</SecurityNote>
     </div>
   );
 }

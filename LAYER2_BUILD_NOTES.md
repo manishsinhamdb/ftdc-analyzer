@@ -964,3 +964,116 @@ Round-2 files touched: `ftdc_analyzer/verdicts.py` (sharding context post-score)
 `AssessmentV2Panel.tsx` (lens re-lens + context callouts + extras slot), `App.tsx` (extras
 wiring). Left **staged, uncommitted** (lands with the rest of Phase 8 as one commit). GUI
 click-through (lens chips, re-lens, context card, Evidence-last on the tab) remains the human step.
+
+---
+
+# Phase 9 — Extensible evidence-input framework + sh.status() & rs.status()
+
+A declarative input registry makes the analyzer accept additional MongoDB diagnostic inputs
+beyond FTDC+healthcheck, each with its own parser, collector helper and unlocked categories;
+ships the first two new inputs (sh.status / rs.status). ADDITIVE; FTDC decoder untouched.
+Validated on the Ludo FTDC dir + healthcheck + synthetic sh.status/rs.status fixtures created
+under files/upload/ (operator will swap in real captures).
+
+## A27. Registry is the SSOT for input metadata + dispatch; existing inputs flow through it
+The registry (`ftdc_analyzer/inputs/registry.py`) holds one entry per input TYPE; the dispatcher
+(`inputs/dispatch`) routes PROVIDED paths to each entry's parser and merges the results uniformly
+(`hc_*`-injection generalized). healthcheck/profiler/ftdc are first-class registry entries: the
+healthcheck PARSE now flows through an adapter (`inputs/healthcheck_input.py`) into the dispatcher
+(its enricher specs reproduce the old `_enrich_structural` byte-for-byte — evidence_key +
+recommendation_flag + when_scored_only); FTDC stays the dir-decode spine (no parser); profiler is
+intake-only (no parser). The engine exposes the registry via `--dump-ruleset` → `inputs_registry`
+so the wizard slots, collector helpers and "awaiting input — provide X" messages all read ONE
+source. Adding an input = a registry entry + a parser module; **the scorer is never touched**.
+(PyInstaller gotcha: the dispatcher resolves parsers via importlib, which PyInstaller doesn't
+follow — `inputs/__init__.py` statically imports the parser modules so they bundle.)
+
+## (a) Registry schema + the 5 seeded entries
+`EvidenceInput{id,label,format(dir|json|text),primary,description,unlocks[],collector{command,
+where,role,security_note,doc},parser("module:fn"|None),cli_flag}`. Seeded:
+1. **ftdc** (dir, PRIMARY, parser=None) — decode spine; unlocks the capacity/incident/cross-cutting cats.
+2. **healthcheck** (json, PRIMARY, parser=healthcheck_input:parse) — unlocks index/schema/storage.
+3. **profiler** (json, evidence, parser=None/intake) — unlocks query-targeting/slow-query.
+4. **sh_status** (json, evidence, parser=inputs.sh_status:parse) — unlocks sharding_topology.
+5. **rs_status** (json, evidence, parser=inputs.rs_status:parse) — enriches replication_lag_cascade.
+
+## (b) Existing inputs refactored through the registry WITHOUT behavior change (regression)
+`build_results` / `build_results_healthcheck_only` now call `inputs.dispatch(provided)` for all
+evidence inputs and consume a uniform `DispatchResult{sig_stats, reports, available, enrichers,
+notes, parsed, sizing}`. The old `_enrich_structural` is replaced by the generic
+`_apply_enrichers`; the sharding context is gated to fire only when sh.status is ABSENT.
+**Regression PROVEN against a pre-Phase-9 baseline** (results.json captured from the committed
+code before editing) for ftdc / hc / both: every category, signal, ledger, sizing block,
+healthcheck block and provided_paths is **byte-identical** except the intended `sharding_topology`
+upgrade (stub/requires_input(ftdc) → requires_input(sh_status); counts shift only by that one
+move) + additive keys (data_sources.sh_status/rs_status=false, top-level sharding/replication=null).
+(`assessment_v2.families` is a set-ordered list — pre-existing nondeterminism across processes —
+normalized in the diff; engine left untouched.)
+
+## (c) sh.status() parser + sharding scoring (`inputs/sh_status.py`)
+Parses shards, databases & primary shards, sharded collections, per-shard chunk counts, balancer
+state and jumbo chunks. Injects `sh_chunk_imbalance_pct` (worst collection's hottest-shard share −
+even share), `sh_balancer_inactive` (enabled-but-not-running or failed rounds), `sh_jumbo_chunks`,
+`sh_shard_count`, `sh_sharded_collections`. `sharding_topology` upgraded stub→DEEP
+(required_inputs=["sh_status"], 3 active signals) → SCORES when sh.status present (synthetic Ludo:
+imbalance 43.6% / 8 jumbo / balancer inactive → conf 1.0, FIRED) with a dynamic per-collection
+recommendation + evidence; ABSENT → requires_input(sh_status) (the Phase-8 healthcheck context
+caveat layers onto it when clusterRole=shardsvr). Honest caveats: chunk COUNTS≠data size; shard-key
+effectiveness needs the profiler; point-in-time mongos view. Collector: run on a mongos,
+clusterMonitor.
+
+## (d) rs.status() parser + replication enrichment (`inputs/rs_status.py`)
+Parses the full member roster, per-member state/health/optime, term & configVersion, and derives
+MEASURED member-to-member lag (primary optime − each secondary optime). ENRICHES
+replication_lag_cascade (no ruleset-signal change → FTDC score unchanged when rs absent): attaches
+`replication_evidence{measured_max_lag_s, per_member_lag_s, roster, term, …}`, an upgraded
+recommendation (when scored), a measured-lag caveat that supersedes the "inferred, not measured"
+one, and a roster note (the tool finally sees ALL members). Synthetic Ludo: measured max lag 48s
+across 2 data-bearing + 1 arbiter. Collector: run on any member, clusterMonitor.
+
+## (e) Collector helpers + awaiting-input surfacing
+`RegistryCollectorHelp` renders any input's collector (command + where + least-priv role +
+security note) straight from the registry. Wizard Step 1 renders ALL slots from the registry
+(primary inputs prominent; evidence inputs under "Optional evidence"), each with its collector in
+"Don't have this? Get it". The Assessment "awaiting input" cards now name the exact registry
+input(s) (`unlockMessage(missing, registry)`) and expose an inline "How to get <label>" with the
+same collector. `data_sources` + Review + source-bar chips + change-detection all generalized.
+
+## (f) Artifact self-UAT — programmatic (pass/fail)
+Engine results across {ftdc, hc, both, hc+sh, hc+rs, all} (dev + bundled):
+- (a) registry drives data_sources (sh_status/rs_status keys present in all combos) ✓; `--dump-ruleset`
+  carries inputs_registry (5 inputs, 2 primary) ✓.
+- (b) sh.status present → sharding SCORED+fired with sh_* ledger + evidence + NO context; absent →
+  requires_input(sh_status) ✓. rs.status present → replication enriched (measured 48s lag + 3-member
+  roster + note); absent → no replication_evidence ✓.
+- (c) ftdc/hc/both byte-identical to pre-Phase-9 baseline except the intended sharding upgrade +
+  additive keys — REGRESSION GREEN ✓.
+- (d) sharding/replication report blocks populated (shard_count 3, jumbo>0, measured lag 48s) ✓.
+Plus `tsc --noEmit` ✓, `cargo check` ✓, `py_compile` ✓.
+NEEDS HUMAN EYES (GUI render only): wizard slots rendering from the registry incl. the 2 new
+evidence slots + their collectors; the awaiting-input "How to get …" inline collector; the
+sharding scored card + replication measured-lag evidence on the Assessment tab.
+
+**Deferred (next phase):** dedicated Sharding/Replication report tabs (the report blocks are stored
+in results but only surfaced via the Assessment cards today); a real (non-synthetic) sh.status /
+rs.status capture; profiler parser (still intake-only).
+
+## (g) Build result
+`make app` → **EXIT 0** (sidecar rebuilt, vite ✓, cargo ✓, `tsc --noEmit` ✓, `py_compile` ✓).
+Bundles: `FTDC Analyzer.app` 36 MB · `FTDC Analyzer_0.1.0_aarch64.dmg` 26 MB. The **bundled**
+sidecar was re-run on all SIX combos (ftdc / hc / both / hc+sh / hc+rs / all) and every UAT suite
+re-ran green against the artifacts the binary wrote:
+- Bundled `--dump-ruleset` carries `inputs_registry` (5 inputs, primary [ftdc, healthcheck]) —
+  proving the registry + parser modules bundle (the importlib static-import fix works).
+- Bundled Phase-9 UAT: ALL PASSED (sharding scores when sh.status present / requires_input(sh_status)
+  absent; replication enriched with measured 48 s lag + 3-member roster when rs.status present).
+- Bundled regression vs pre-Phase-9 baseline (ftdc/hc/both): byte-identical except the intended
+  sharding upgrade — REGRESSION GREEN.
+- Bundled export: Assessment present + Layer-3 Evidence last.
+New files: `ftdc_analyzer/inputs/{__init__,registry,sh_status,rs_status,healthcheck_input}.py`,
+`files/upload/{sh_status,rs_status}/*_ludo.json` (synthetic fixtures). Modified: verdicts.py
+(dispatch + generic enrichers + sh/rs params), ruleset/{schema,defaults}.py (vocabulary +
+sharding deep), cli.py (--sh-status/--rs-status + registry in dump), Rust lib.rs (2 args), and the
+UI (ruleset.ts registry types + cachedInputRegistry, AssessmentControls/AssessmentV2Panel,
+CollectorHelp generic, Landing registry-driven slots, App generic input plumbing, preflight).
+Left **staged, uncommitted** (no commit/tag/push). GUI click-through is the human step.

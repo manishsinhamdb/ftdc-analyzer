@@ -23,6 +23,8 @@ async fn analyze_path(
     intent: Option<String>,
     healthcheck: Option<String>,
     profiler: Option<String>,
+    sh_status: Option<String>,
+    rs_status: Option<String>,
     cloud: Option<String>,
 ) -> Result<AnalyzeResult, String> {
     // Co-primary inputs: either FTDC (`path`) or a healthcheck snapshot (or both) is enough.
@@ -78,6 +80,15 @@ async fn analyze_path(
     if let Some(pf) = profiler.filter(|s| !s.is_empty()) {
         args.push("--profiler".to_string());
         args.push(pf);
+    }
+    // Phase-9 evidence inputs (registry-driven; route to their parsers in the engine).
+    if let Some(sh) = sh_status.filter(|s| !s.is_empty()) {
+        args.push("--sh-status".to_string());
+        args.push(sh);
+    }
+    if let Some(rs) = rs_status.filter(|s| !s.is_empty()) {
+        args.push("--rs-status".to_string());
+        args.push(rs);
     }
     // Cloud provider selects the sizing tier table (right-sizing / cost intents).
     if let Some(c) = cloud.filter(|s| !s.is_empty()) {
