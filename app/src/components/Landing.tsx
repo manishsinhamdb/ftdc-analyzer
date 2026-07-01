@@ -6,7 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
-  Cpu,
+  // Cpu removed
   Database,
   FileText,
   FolderOpen,
@@ -28,7 +28,7 @@ import {
   cachedInputRegistry,
   cachedRulesetDump,
 } from "@/lib/ruleset";
-import { type AssessmentMode, IntentPicker, ModelPicker } from "@/components/AssessmentControls";
+import { IntentPicker } from "@/components/AssessmentControls";
 import { RegistryCollectorHelp } from "@/components/CollectorHelp";
 import { type Baseline, classifyRun } from "@/lib/preflight";
 import { CLOUDS } from "@/lib/sizing";
@@ -46,8 +46,7 @@ interface Props {
   onIntentChange: (id: string) => void;
   cloud: string;
   onCloudChange: (c: string) => void;
-  assessmentMode: AssessmentMode;
-  onAssessmentModeChange: (m: AssessmentMode) => void;
+  // assessment mode removed - always using template-based narratives
   model: string | null;
   onModelChange: (m: string) => void;
   onRun: (baseline: Baseline | null) => void;
@@ -206,10 +205,9 @@ export function Landing(props: Props) {
     onIntentChange,
     cloud,
     onCloudChange,
-    assessmentMode,
-    onAssessmentModeChange,
+    // assessmentMode removed
     model,
-    onModelChange,
+    // onModelChange removed
     onRun,
     history,
     onSelectRecent,
@@ -256,7 +254,7 @@ export function Landing(props: Props) {
   const plan = classifyRun(phase === "wizard" && baseline ? baseline : null, {
     ftdc: selectedPath,
     intent: intent ?? "full_sweep",
-    mode: assessmentMode,
+    // mode removed
     model,
     healthcheck: healthcheckPath,
     profiler: inputValues.profiler ?? null,
@@ -278,7 +276,7 @@ export function Landing(props: Props) {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "TEXTAREA" || tag === "SELECT" || tag === "INPUT") return;
       if (step < 4 && canNext) setStep((s) => s + 1);
-      else if (step === 4 && !analyzing) onRun(baseline);
+      else if (step === 3 && !analyzing) onRun(baseline); // was step 4
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -293,7 +291,7 @@ export function Landing(props: Props) {
   function openRecent(entry: RunHistoryEntry) {
     const b = onSelectRecent(entry);
     setBaseline(b);
-    setStep(4);
+    setStep(3); // Skip to review (was step 4, now 3)
     setPhase("wizard");
   }
 
@@ -508,50 +506,13 @@ export function Landing(props: Props) {
               )}
 
               {/* Step 3 — Mode */}
-              {step === 3 && (
-                <section className="space-y-3">
-                  <h2 className="text-sm font-semibold">Step 3 · Reasoning mode</h2>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <button
-                      onClick={() => onAssessmentModeChange("grounded")}
-                      className={"rounded-lg border p-3 text-left transition-colors " + (assessmentMode === "grounded" ? "border-primary bg-primary/10" : "border-border hover:bg-secondary/40")}
-                    >
-                      <div className="flex items-center gap-2 text-sm font-semibold">
-                        <FileText className="size-4 text-primary" /> Rule-based (grounded)
-                        {assessmentMode === "grounded" && <Check className="ml-auto size-4 text-primary" />}
-                      </div>
-                      <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
-                        Deterministic scoring with a fully traceable evidence ledger. Works with any setup.
-                      </p>
-                    </button>
-                    <button
-                      onClick={() => onAssessmentModeChange("llm")}
-                      className={"rounded-lg border p-3 text-left transition-colors " + (assessmentMode === "llm" ? "border-primary bg-primary/10" : "border-border hover:bg-secondary/40")}
-                    >
-                      <div className="flex items-center gap-2 text-sm font-semibold">
-                        <Cpu className="size-4 text-primary" /> LLM-led
-                        {assessmentMode === "llm" && <Check className="ml-auto size-4 text-primary" />}
-                      </div>
-                      <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
-                        An AI model reasons over the scored evidence for a richer narrative. Best with a strong endpoint.
-                      </p>
-                    </button>
-                  </div>
-                  {assessmentMode === "llm" && (
-                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-secondary/20 p-3">
-                      <ModelPicker model={model} onChange={onModelChange} />
-                      <span className="text-[11px] text-muted-foreground">
-                        active: <span className="font-mono text-foreground">{model ?? "— none —"}</span> · paid hidden · falls back to grounded if unavailable
-                      </span>
-                    </div>
-                  )}
-                </section>
-              )}
+              {/* Step 3 removed */}
+              {/* Step 3 removed - mode selection eliminated */}
 
               {/* Step 4 — Review */}
-              {step === 4 && (
+              {step === 3 && (
                 <section className="space-y-3">
-                  <h2 className="text-sm font-semibold">Step 4 · Review</h2>
+                  <h2 className="text-sm font-semibold">Step 3 · Review</h2>
                   <div className="space-y-2">
                     <SummaryRow
                       label="FTDC diagnostic.data"
@@ -584,8 +545,8 @@ export function Landing(props: Props) {
                     )}
                     <SummaryRow
                       label="Reasoning mode"
-                      value={assessmentMode === "llm" ? `LLM-led${model ? ` · ${model}` : ""}` : "Rule-based (grounded)"}
-                      onEdit={() => setStep(3)}
+                      value="Template-based narrative"
+                      onEdit={() => {/* mode removed */}}
                     />
                   </div>
                   {/* Change-detection note (the action label, always visible) */}

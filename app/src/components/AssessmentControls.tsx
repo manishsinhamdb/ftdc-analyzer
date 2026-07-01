@@ -3,18 +3,9 @@
 // category selector (16 categories grouped by family; input-gated ones marked).
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Cpu, FileText, Loader2, Lock } from "lucide-react";
+import { Check, FileText, Loader2, Lock } from "lucide-react";
 
-import {
-  type LabeledModel,
-  type LlmConfig,
-  ANTHROPIC_FALLBACK_MODELS,
-  activeProvider,
-  getLlmConfig,
-  labelModelsForDialect,
-  makeClient,
-  setLlmConfig,
-} from "@/lib/llm";
+// LLM imports removed - using template-based narratives
 import {
   type RuleCategory,
   type RulesetDump,
@@ -24,151 +15,7 @@ import {
   mergeIntents,
 } from "@/lib/ruleset";
 
-export type AssessmentMode = "grounded" | "llm";
-
-// ---------------------------------------------------------------------------
-export function ModeSelector({
-  mode,
-  onChange,
-}: {
-  mode: AssessmentMode;
-  onChange: (m: AssessmentMode) => void;
-}) {
-  return (
-    <div className="inline-flex rounded-md border border-border p-0.5">
-      {(["grounded", "llm"] as const).map((m) => (
-        <button
-          key={m}
-          onClick={() => onChange(m)}
-          className={
-            "rounded px-2.5 py-1 text-xs font-medium transition-colors " +
-            (mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary/50")
-          }
-          title={
-            m === "grounded"
-              ? "Deterministic ledger only — instant, no LLM"
-              : "Narrate the scored findings with the selected model"
-          }
-        >
-          {m === "grounded" ? "Grounded" : "LLM-reasoned"}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-export function ModelPicker({
-  model,
-  onChange,
-  compact,
-}: {
-  model: string | null;
-  onChange: (model: string) => void;
-  compact?: boolean;
-}) {
-  const [cfg, setCfg] = useState<LlmConfig | null>(null);
-  const [models, setModels] = useState<LabeledModel[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const c = await getLlmConfig();
-        if (!alive) return;
-        setCfg(c);
-        if (c.model) onChange(c.model); // sync parent to the persisted choice
-        const ap = activeProvider(c);
-        try {
-          const res = await makeClient(ap).listModels();
-          if (!alive) return;
-          setModels(labelModelsForDialect(res.models, ap.dialect).filter((m) => m.selectable));
-        } catch (e) {
-          // Anthropic without a key (or unreachable) → offer the known fallback list.
-          if (ap.dialect === "anthropic") {
-            setModels(labelModelsForDialect(ANTHROPIC_FALLBACK_MODELS, "anthropic"));
-          } else {
-            throw e;
-          }
-        }
-        setErr(null);
-      } catch (e) {
-        if (alive) setErr(String(e));
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  async function pick(id: string) {
-    onChange(id);
-    if (cfg) {
-      try {
-        await setLlmConfig({ ...cfg, model: id });
-      } catch {
-        /* persist best-effort */
-      }
-    }
-  }
-
-  const local = models.filter((m) => m.tier === "local");
-  const cloud = models.filter((m) => m.tier === "cloud");
-
-  if (loading) {
-    return (
-      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Loader2 className="size-3.5 animate-spin" /> loading models…
-      </span>
-    );
-  }
-  if (err) {
-    return (
-      <span className="text-xs text-destructive" title={err}>
-        models unavailable — set endpoint in LLM Settings
-      </span>
-    );
-  }
-
-  return (
-    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <Cpu className="size-3.5 text-primary" />
-      {!compact && <span>model</span>}
-      <select
-        value={model ?? ""}
-        onChange={(e) => pick(e.target.value)}
-        className="h-8 max-w-[220px] rounded-md border border-border bg-background px-2 font-mono text-xs text-foreground"
-      >
-        <option value="" disabled>
-          select a model…
-        </option>
-        {local.length > 0 && (
-          <optgroup label="local (free)">
-            {local.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.id}
-                {m.reasoningOnly ? " (reasoning)" : ""}
-              </option>
-            ))}
-          </optgroup>
-        )}
-        {cloud.length > 0 && (
-          <optgroup label="cloud (free, may change)">
-            {cloud.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.id}
-              </option>
-            ))}
-          </optgroup>
-        )}
-      </select>
-    </label>
-  );
-}
+// ModeSelector and ModelPicker removed - always using template-based narratives
 
 // ---------------------------------------------------------------------------
 export function CategorySelector({

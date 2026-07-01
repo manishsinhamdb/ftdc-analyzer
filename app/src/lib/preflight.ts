@@ -4,12 +4,12 @@
 // cache_dir in localStorage) so a recent analysis can be re-opened on the Review step with
 // its prior selections, and the right run action can be computed.
 
-import type { AssessmentMode } from "@/components/AssessmentControls";
+// AssessmentMode removed - always using template-based narratives
 
 export interface Selections {
   ftdc: string | null;
   intent: string;
-  mode: AssessmentMode;
+  // mode removed - always template-based
   model: string | null;
   healthcheck: string | null;
   profiler: string | null;
@@ -62,7 +62,7 @@ export function classifyRun(baseline: Baseline | null, cur: Selections): RunPlan
   }
   const changed: string[] = [];
   if (cur.intent !== baseline.intent) changed.push("Intent");
-  if (cur.mode !== baseline.mode) changed.push("Mode");
+  // mode removed - always template-based
   if (cur.model !== baseline.model) changed.push("Model");
   if (cur.cloud !== baseline.cloud) changed.push("Cloud");
   if (changed.length) {

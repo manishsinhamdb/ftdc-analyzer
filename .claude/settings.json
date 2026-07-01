@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "autoAllow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskList",
+      "TaskGet",
+      "TaskStop",
+      "Agent",
+      "Workflow"
+    ],
+    "ask": [
+      "Write(/usr/*)",
+      "Write(/System/*)",
+      "Write(/Library/*)",
+      "Write(/etc/*)",
+      "Write(/bin/*)",
+      "Write(/sbin/*)",
+      "Write(/var/*)",
+      "Bash(sudo *)",
+      "Bash(rm -rf /*)",
+      "Bash(chmod 777 *)"
+    ]
+  }
+}

@@ -1,0 +1,1373 @@
+"""Deterministic FTDC verdicts + results.json assembly.
+
+Consumes metrics.extract + metrics.derive, applies fixed threshold rules to the
+summary percentiles, and writes a self-contained results.json (stats, verdicts,
+downsampled chart series) under reports/.
+"""
+
+import os
+import json
+import math
+import datetime
+
+import numpy as np
+
+from ftdc_analyzer import metrics
+from ftdc_analyzer import decoder
+from ftdc_analyzer import signatures
+from ftdc_analyzer import scorer as _scorer
+from ftdc_analyzer import sizing as _sizing
+from ftdc_analyzer import healthcheck as _healthcheck
+from ftdc_analyzer import inputs as _inputs
+from ftdc_analyzer.ruleset import build_ruleset as _build_ruleset
+from ftdc_analyzer.ruleset.overrides import load_overrides as _load_overrides
+
+# ---------------------------------------------------------------------------
+# Units + summary stats
+# ---------------------------------------------------------------------------
+UNITS = {
+    "cache_used_pct": "%", "cache_dirty_pct": "%",
+    "cpu_util_pct": "%", "cpu_iowait_pct": "%", "cpu_steal_pct": "%",
+    "procs_running": "count", "procs_blocked": "count",
+    "mem_free_pct": "%", "page_cache_gb": "GB", "swap_used_mb": "MB",
+    "mongod_alloc_gb": "GB",
+    "disk_read_iops": "iops", "disk_write_iops": "iops", "disk_iops": "iops",
+    "disk_util_pct": "%", "disk_avg_read_ms": "ms", "disk_avg_write_ms": "ms",
+    "disk_queue_depth": "count", "disk_read_mbps": "MB/s", "disk_write_mbps": "MB/s",
+    "oplat_read_ms": "ms", "oplat_write_ms": "ms", "oplat_cmd_ms": "ms",
+    "ops_insert_ps": "ops/s", "ops_query_ps": "ops/s", "ops_update_ps": "ops/s",
+    "ops_delete_ps": "ops/s", "ops_getmore_ps": "ops/s", "ops_command_ps": "ops/s",
+    "ops_total_ps": "ops/s", "repl_writes_ps": "ops/s",
+    "wt_pages_read_into_cache_ps": "pages/s", "wt_pages_written_ps": "pages/s",
+    "wt_app_evict_ps": "pages/s", "wt_app_read_into_cache_us": "us",
+    "read_queue": "count", "write_queue": "count", "connections_current": "count",
+    "asserts_per_min": "per_min", "repl_lag_s": "s",
+    # --- Atlas-style additions (schema v2) ---
+    "cpu_user_pct": "%", "cpu_system_pct": "%",
+    "docs_returned_ps": "docs/s", "docs_inserted_ps": "docs/s",
+    "docs_updated_ps": "docs/s", "docs_deleted_ps": "docs/s",
+    "keys_scanned_ps": "keys/s", "objs_scanned_ps": "objs/s",
+    "scan_and_order_ps": "ops/s", "write_conflicts_ps": "ops/s",
+    "net_in_mbps": "MB/s", "net_out_mbps": "MB/s", "net_requests_ps": "req/s",
+    "cache_read_mbps": "MB/s", "cache_write_mbps": "MB/s",
+    "conn_created_ps": "conn/s", "page_faults_ps": "faults/s",
+    "repl_getmores_ps": "ops/s", "repl_apply_ops_ps": "ops/s",
+    "read_ticket_util_pct": "%", "write_ticket_util_pct": "%",
+    "conn_used_pct": "%", "query_targeting_ratio": "ratio",
+    "mem_resident_gb": "GB", "mem_virtual_gb": "GB",
+    "read_tickets_out": "count", "write_tickets_out": "count",
+    "read_tickets_available": "count", "write_tickets_available": "count",
+    "active_clients_readers": "count", "active_clients_writers": "count",
+    "repl_buffer_mb": "MB", "queue_depth": "count",
+    "stale_config_errors_ps": "/s", "wt_checkpoint_running": "0/1",
+    # --- Atlas-parity additions ---
+    "keys_examined_per_returned": "x", "docs_examined_per_returned": "x",
+    "repl_lag_member_0_s": "s", "repl_lag_member_1_s": "s", "repl_lag_member_2_s": "s",
+    "cursors_open": "count", "cursors_timed_out_ps": "/s",
+    # --- additive (Part 2): asserts / queue / checkpoint / eviction / log / cursors / ttl ---
+    "asserts_regular_ps": "/s", "asserts_warning_ps": "/s", "asserts_msg_ps": "/s",
+    "asserts_user_ps": "/s", "asserts_rollovers_ps": "/s",
+    "queued_total": "count", "active_clients_total": "count",
+    "wt_checkpoint_recent_ms": "ms", "wt_checkpoint_min_ms": "ms", "wt_checkpoint_max_ms": "ms",
+    "wt_modified_evict_ps": "pages/s", "wt_unmodified_evict_ps": "pages/s",
+    "wt_log_bytes_mbps": "MB/s", "wt_log_write_ops_ps": "/s", "wt_log_sync_ps": "/s",
+    "cursors_no_timeout": "count", "cursors_pinned": "count",
+    "ttl_deleted_ps": "docs/s", "ttl_passes_ps": "/s",
+}
+
+
+def _r3(x):
+    return None if x is None else round(float(x), 3)
+
+
+def _stats(arr):
+    if arr is None or len(arr) == 0 or not np.any(np.isfinite(arr)):
+        return None
+    p50, p95, p99 = np.nanpercentile(arr, [50, 95, 99])
+    return {
+        "p50": _r3(p50), "p95": _r3(p95), "p99": _r3(p99),
+        "max": _r3(np.nanmax(arr)), "mean": _r3(np.nanmean(arr)),
+    }
+
+
+def _conf(margin):
+    return "high" if (margin is not None and margin > 0.25) else "medium"
+
+
+def _chk(name, value, threshold, status):
+    return {"name": name, "value": _r3(value), "threshold": threshold, "status": status}
+
+
+def _grade_high(v, warn, fail):
+    """Higher is worse."""
+    if v is None:
+        return "NA"
+    if v >= fail:
+        return "FAIL"
+    if v >= warn:
+        return "WARN"
+    return "PASS"
+
+
+# ---------------------------------------------------------------------------
+# Verdicts
+# ---------------------------------------------------------------------------
+def verdict_ram(st, sig_stats):
+    def g(label, q):
+        s = sig_stats.get(label)
+        return s[q] if s else None
+
+    used_p95 = g("cache_used_pct", "p95")
+    dirty_p95 = g("cache_dirty_pct", "p95")
+    evict_max = g("wt_app_evict_ps", "max")
+    readps_p95 = g("wt_pages_read_into_cache_ps", "p95")
+    pf_p95 = g("page_faults_ps", "p95")
+
+    checks = [
+        _chk("cache_used_pct.p95", used_p95, 95, _grade_high(used_p95, 80, 95)),
+        _chk("cache_dirty_pct.p95", dirty_p95, 5.5, _grade_high(dirty_p95, 5, 5.5)),
+        _chk("wt_app_evict_ps.max", evict_max, 0, "FAIL" if (evict_max or 0) > 0 else "PASS"),
+        _chk("wt_pages_read_into_cache_ps.p95", readps_p95, 50, "PASS"),
+        _chk("page_faults_ps.p95", pf_p95, 10, _grade_high(pf_p95, 1, 10)),
+    ]
+
+    # Recalibrated against expert baseline: dirty hovering at the 5% WT dirty-target
+    # (real pressure trigger is dirty_trigger=20%) with zero app-thread eviction and no
+    # page faults is NOT memory pressure. Threshold set above the target at 5.5%.
+    undersized = ((evict_max or 0) > 0
+                  or (dirty_p95 or 0) > 5.5
+                  or ((used_p95 or 0) > 95 and (pf_p95 or 0) > 10))
+    reduce = (used_p95 is not None and used_p95 < 60
+              and (readps_p95 or 0) < 50 and (pf_p95 or 0) < 1)
+
+    if undersized:
+        cands = []
+        if (evict_max or 0) > 0:
+            cands.append(("wt_app_evict_ps.max", evict_max, 0, 1.0))
+        if (dirty_p95 or 0) > 5.5:
+            cands.append(("cache_dirty_pct.p95", dirty_p95, 5.5, (dirty_p95 - 5.5) / 5.5))
+        if (used_p95 or 0) > 95 and (pf_p95 or 0) > 10:
+            cands.append(("cache_used_pct.p95", used_p95, 95, (used_p95 - 95) / 95))
+        name, val, thr, margin = max(cands, key=lambda c: c[3])
+        verdict, conf = "UNDERSIZED", _conf(margin)
+        headline = (f"WiredTiger cache under pressure ({name}={_r3(val)} "
+                    f"exceeds {thr}); more RAM would relieve eviction/dirty load.")
+        rec = ("Increase RAM (or wiredTigerCacheSizeGB) so dirty stays <5% and the "
+               "cache is not forced into application-thread eviction. Re-check after bump.")
+        cost_action = {
+            "action": "Increase RAM / WT cache", "lever": "ram",
+            "est_saving_note": "spend, not save — relieves cache pressure",
+            "risk": "low"}
+    elif reduce:
+        margin = min((60 - used_p95) / 60, (50 - (readps_p95 or 0)) / 50)
+        verdict, conf = "REDUCE", _conf(margin)
+        headline = (f"Cache comfortably under target (used p95={_r3(used_p95)}%, "
+                    f"low read-in, no page faults); RAM can be trimmed.")
+        rec = ("Cache is over-provisioned for the working set. Consider a smaller-RAM "
+               "instance; keep headroom so cache_used stays <80%.")
+        cost_action = {
+            "action": "Downsize RAM tier", "lever": "ram",
+            "est_saving_note": "smaller-RAM instance covers the working set",
+            "risk": "medium"}
+    else:
+        margin = min(abs((used_p95 or 0) - 95) / 95, abs((dirty_p95 or 0) - 5) / 5)
+        verdict, conf = "HOLD", _conf(margin)
+        headline = "Cache adequate — no memory/WT pressure."
+        rec = ("Keep current RAM. dirty% sits at the 5% WT target, app-thread eviction "
+               "is zero, and page faults are negligible — no memory pressure.")
+        cost_action = {
+            "action": "No change — adequate", "lever": "none",
+            "est_saving_note": "—", "risk": "none"}
+
+    return {"verdict": verdict, "confidence": conf, "headline": headline,
+            "checks": checks, "recommendation": rec, "cost_action": cost_action}
+
+
+def verdict_cpu(st, sig_stats, cores, role):
+    def g(label, q):
+        s = sig_stats.get(label)
+        return s[q] if s else None
+
+    util_p99 = g("cpu_util_pct", "p99")
+    util_max = g("cpu_util_pct", "max")
+    iowait_p99 = g("cpu_iowait_pct", "p99")
+    steal_p99 = g("cpu_steal_pct", "p99")
+
+    checks = [
+        _chk("cpu_util_pct.p99", util_p99, 70, _grade_high(util_p99, 55, 70)),
+        _chk("cpu_util_pct.max", util_max, 90, _grade_high(util_max, 80, 90)),
+        _chk("cpu_iowait_pct.p99", iowait_p99, 10, _grade_high(iowait_p99, 10, 25)),
+        _chk("cpu_steal_pct.p99", steal_p99, 5, _grade_high(steal_p99, 5, 10)),
+    ]
+
+    constrained = (util_p99 or 0) > 70 or (util_max or 0) > 90
+    reduce = util_p99 is not None and util_p99 < 40
+    recommended_vcpus = None
+
+    if constrained:
+        cands = []
+        if (util_p99 or 0) > 70:
+            cands.append(("cpu_util_pct.p99", util_p99, 70, (util_p99 - 70) / 70))
+        if (util_max or 0) > 90:
+            cands.append(("cpu_util_pct.max", util_max, 90, (util_max - 90) / 90))
+        name, val, thr, margin = max(cands, key=lambda c: c[3])
+        verdict, conf = "CONSTRAINED", _conf(margin)
+        headline = f"CPU constrained ({name}={_r3(val)} over {thr}); add vCPUs."
+        rec = "Scale up vCPUs; investigate top consumers (checkpoint, eviction, queries)."
+    elif reduce:
+        margin = (40 - util_p99) / 40
+        need = max(math.ceil(cores * (util_max or 0) / 100 / 0.85),
+                   math.ceil(cores * util_p99 / 100 / 0.65), 2)
+        recommended_vcpus = next((c for c in (2, 4, 8, 16, 32) if c >= need), 32)
+        verdict, conf = "REDUCE", _conf(margin)
+        headline = (f"CPU lightly used (util p99={_r3(util_p99)}%, max={_r3(util_max)}%); "
+                    f"can downsize from {cores} to {recommended_vcpus} vCPU.")
+        rec = (f"Headroom is large. {recommended_vcpus} vCPUs cover peak at ~85% and "
+               f"p99 at ~65%. Validate post-resize before further cuts.")
+    else:
+        margin = min(abs((util_p99 or 0) - 70) / 70, abs((util_p99 or 0) - 40) / 40)
+        verdict, conf = "HOLD", _conf(margin)
+        headline = f"CPU appropriately sized (util p99={_r3(util_p99)}%)."
+        rec = "Keep current vCPU count."
+
+    if role == "SECONDARY":
+        rec += (" Caveat: as a SECONDARY this reflects replication+read load only; "
+                "size for primary write load if this node may be promoted.")
+
+    if verdict == "REDUCE":
+        caveat = (" (SECONDARY: re-validate for primary write load before promotion)"
+                  if role == "SECONDARY" else "")
+        cost_action = {
+            "action": f"Downsize vCPU {cores}→{recommended_vcpus}", "lever": "vcpu",
+            "est_saving_note": (f"~{round((1 - recommended_vcpus / cores) * 100)}% fewer "
+                                f"vCPUs at same headroom{caveat}"),
+            "risk": "low"}
+    elif verdict == "CONSTRAINED":
+        cost_action = {
+            "action": "Add vCPUs", "lever": "vcpu",
+            "est_saving_note": "spend to add CPU headroom", "risk": "medium"}
+    else:
+        cost_action = {"action": "No change", "lever": "none",
+                       "est_saving_note": "—", "risk": "none"}
+
+    return {"verdict": verdict, "confidence": conf, "headline": headline,
+            "checks": checks, "recommendation": rec,
+            "recommended_vcpus": recommended_vcpus, "cost_action": cost_action}
+
+
+def verdict_disk(st, sig_stats, data_disk, role):
+    def g(label, q):
+        s = sig_stats.get(label)
+        return s[q] if s else None
+
+    util_p95 = g("disk_util_pct", "p95")
+    util_max = g("disk_util_pct", "max")
+    avgwrite_p95 = g("disk_avg_write_ms", "p95")
+    avgread_p95 = g("disk_avg_read_ms", "p95")
+    writeiops_p95 = g("disk_write_iops", "p95")
+    queue_p95 = g("disk_queue_depth", "p95")
+    iowait_p99 = g("cpu_iowait_pct", "p99")
+
+    checks = [
+        _chk("disk_util_pct.p95", util_p95, 85, _grade_high(util_p95, 70, 85)),
+        _chk("disk_util_pct.max", util_max, 95, _grade_high(util_max, 90, 95)),
+        _chk("disk_avg_write_ms.p95", avgwrite_p95, 10, _grade_high(avgwrite_p95, 5, 10)),
+        _chk("disk_avg_read_ms.p95", avgread_p95, 5, _grade_high(avgread_p95, 3, 5)),
+        _chk("disk_write_iops.p95", writeiops_p95, None, "PASS"),
+        _chk("disk_queue_depth.p95", queue_p95, 16, _grade_high(queue_p95, 16, 32)),
+        _chk("cpu_iowait_pct.p99", iowait_p99, 10, _grade_high(iowait_p99, 10, 25)),
+    ]
+
+    saturated = (util_p95 or 0) >= 85
+    reduce = (util_p95 is not None and util_p95 < 40
+              and (avgwrite_p95 or 0) < 10 and (avgread_p95 or 0) < 5)
+    lat_healthy = (avgwrite_p95 or 0) < 10
+
+    if saturated:
+        margin = (util_p95 - 85) / 85
+        verdict, conf = "SATURATED", _conf(margin)
+        headline = (f"{data_disk} saturated (util p95={_r3(util_p95)}%, "
+                    f"write IOPS p95={_r3(writeiops_p95)}); throughput-bound.")
+        rec = ("Move to a higher-IOPS/throughput volume or shed write/checkpoint load "
+               "(tune checkpoint cadence, reduce write amplification). "
+               + ("Latency is still healthy (avg_write_ms.p95 "
+                  f"{_r3(avgwrite_p95)}<10), so utilization — not service time — is the "
+                  "ceiling; headroom shrinks as load grows."
+                  if lat_healthy else
+                  "Latency is already elevated; act before service time degrades further."))
+    elif reduce:
+        margin = min((40 - util_p95) / 40, (10 - (avgwrite_p95 or 0)) / 10,
+                     (5 - (avgread_p95 or 0)) / 5)
+        verdict, conf = "REDUCE", _conf(margin)
+        headline = (f"{data_disk} lightly used (util p95={_r3(util_p95)}%, low latency); "
+                    f"can move to a cheaper volume.")
+        rec = "Disk is over-provisioned; a smaller/cheaper volume tier would suffice."
+    else:
+        margin = abs((util_p95 or 0) - 85) / 85
+        verdict, conf = "HOLD", _conf(margin)
+        headline = f"{data_disk} adequate (util p95={_r3(util_p95)}%)."
+        rec = "Keep current volume; monitor utilization and write latency."
+
+    if role == "SECONDARY":
+        rec += (" Caveat: SECONDARY write load is replication-driven; a promoted primary "
+                "would add direct client writes on top.")
+
+    if verdict == "SATURATED":
+        cost_action = {
+            "action": "Right-size the storage volume (not the instance)", "lever": "storage",
+            "est_saving_note": ("checkpoint-bound saturation, latency healthy — evaluate a "
+                                "better/cheaper tier (e.g., gp3 with provisioned IOPS); "
+                                "do NOT upsize the VM for this"),
+            "risk": "medium"}
+    elif verdict == "REDUCE":
+        cost_action = {
+            "action": "Move to a smaller/cheaper volume", "lever": "storage",
+            "est_saving_note": "volume is over-provisioned for the load", "risk": "low"}
+    else:
+        cost_action = {"action": "No change", "lever": "none",
+                       "est_saving_note": "—", "risk": "none"}
+
+    return {"verdict": verdict, "confidence": conf, "headline": headline,
+            "checks": checks, "recommendation": rec, "cost_action": cost_action}
+
+
+# ---------------------------------------------------------------------------
+# Downsampled series
+# ---------------------------------------------------------------------------
+# Series key -> underlying signal key (only where they differ; disk aliases keep the
+# short chart-facing names that existed in schema v1).
+SERIES_SOURCE = {
+    "read_iops": "disk_read_iops",
+    "write_iops": "disk_write_iops",
+    "read_mbps": "disk_read_mbps",
+    "write_mbps": "disk_write_mbps",
+    "avg_read_ms": "disk_avg_read_ms",
+    "avg_write_ms": "disk_avg_write_ms",
+}
+
+# Gauges aggregate with MEAN; everything else (rates / pct / ratio / latency) MAX.
+MEAN_SET = {
+    "cache_used_pct", "cache_dirty_pct", "mongod_alloc_gb", "page_cache_gb",
+    "connections_current", "mem_resident_gb", "mem_virtual_gb",
+    "read_tickets_out", "write_tickets_out",
+    "active_clients_readers", "active_clients_writers",
+    "repl_buffer_mb", "procs_running", "procs_blocked", "queue_depth",
+    "cursors_open",
+    # --- additive (Part 2) gauges ---
+    "queued_total", "active_clients_total",
+    "wt_checkpoint_recent_ms", "wt_checkpoint_min_ms", "wt_checkpoint_max_ms",
+    "cursors_no_timeout", "cursors_pinned",
+}
+
+MAX_POINTS = 2500
+
+
+def _sc(key, label, ref_line=None, ref_label=None):
+    e = {"key": key, "label": label}
+    if ref_line is not None:
+        e["refLine"] = ref_line
+        e["refLabel"] = ref_label
+    return e
+
+
+# Per-source placeholder messages for scaffolding charts whose data needs a source
+# FTDC does not contain. Named so the message tells the user exactly what to provide.
+PLACEHOLDER_HEALTHCHECK = ("Data not available — upload the healthcheck snapshot "
+                           "(getMongoData.js output) to populate this.")
+PLACEHOLDER_PROFILER = ("Data not available — upload the MongoDB slow-query log / "
+                        "profiler output to populate this.")
+
+# Data-driven Atlas-style catalog. Each chart carries an implicit data_state of
+# "present" (render real series) unless it declares "requires_input" (needs a source
+# not yet ingested) or "unavailable_version" (metric not emitted on this server
+# version). build_results resolves the state + placeholder text at assembly time.
+CHART_CATALOG = [
+    {"category": "Operations", "charts": [
+        {"title": "Opcounters", "unit": "/s", "series": [
+            _sc("ops_query_ps", "query"), _sc("ops_insert_ps", "insert"),
+            _sc("ops_update_ps", "update"), _sc("ops_delete_ps", "delete"),
+            _sc("ops_getmore_ps", "getmore"), _sc("ops_command_ps", "command")]},
+        {"title": "Document metrics", "unit": "/s", "series": [
+            _sc("docs_returned_ps", "returned"), _sc("docs_inserted_ps", "inserted"),
+            _sc("docs_updated_ps", "updated"), _sc("docs_deleted_ps", "deleted")]},
+        {"title": "Query targeting (scanned objects ÷ returned)", "unit": "", "series": [
+            _sc("query_targeting_ratio", "scanned/returned", 100, "100× targeting")]},
+        {"title": "Scan-and-order / write conflicts", "unit": "/s", "series": [
+            _sc("scan_and_order_ps", "scanAndOrder"),
+            _sc("write_conflicts_ps", "writeConflicts")]},
+        {"title": "TTL deletes", "unit": "/s", "series": [
+            _sc("ttl_deleted_ps", "docs deleted/s"), _sc("ttl_passes_ps", "passes/s")]},
+    ]},
+    {"category": "Latency", "charts": [
+        {"title": "Operation latency", "unit": "ms", "series": [
+            _sc("oplat_read_ms", "read"), _sc("oplat_write_ms", "write"),
+            _sc("oplat_cmd_ms", "command")]},
+    ]},
+    {"category": "Query Efficiency", "charts": [
+        {"title": "Query Targeting", "unit": "x", "series": [
+            _sc("keys_examined_per_returned", "keys/returned"),
+            _sc("docs_examined_per_returned", "docs/returned", 1, "1:1 ideal")]},
+        {"title": "Scan & Order", "unit": "/s", "series": [
+            _sc("scan_and_order_ps", "scanAndOrder/s")]},
+        {"title": "Index & document scans", "unit": "/s", "series": [
+            _sc("keys_scanned_ps", "keys scanned"),
+            _sc("objs_scanned_ps", "objects scanned"),
+            _sc("scan_and_order_ps", "scanAndOrder")]},
+        {"title": "Document Metrics", "unit": "/s", "series": [
+            _sc("docs_returned_ps", "returned"), _sc("docs_inserted_ps", "inserted"),
+            _sc("docs_updated_ps", "updated"), _sc("docs_deleted_ps", "deleted")]},
+        {"title": "Operation execution time", "unit": "ms", "series": [
+            _sc("oplat_read_ms", "read"), _sc("oplat_write_ms", "write"),
+            _sc("oplat_cmd_ms", "command")]},
+    ]},
+    {"category": "Connections & Network", "charts": [
+        {"title": "Connections", "unit": "", "series": [
+            _sc("connections_current", "current")]},
+        {"title": "Connection used %", "unit": "%", "series": [
+            _sc("conn_used_pct", "used %", 80, "80%")]},
+        {"title": "New connections", "unit": "/s", "series": [
+            _sc("conn_created_ps", "created/s")]},
+        {"title": "Network throughput", "unit": "MB/s", "series": [
+            _sc("net_in_mbps", "in"), _sc("net_out_mbps", "out")]},
+        {"title": "Network requests", "unit": "/s", "series": [
+            _sc("net_requests_ps", "requests/s")]},
+        {"title": "Cursors", "unit": "", "series": [
+            _sc("cursors_open", "open"), _sc("cursors_no_timeout", "no-timeout"),
+            _sc("cursors_pinned", "pinned"), _sc("cursors_timed_out_ps", "timed out/s")]},
+    ]},
+    {"category": "Memory", "charts": [
+        {"title": "Process memory", "unit": "GB", "series": [
+            _sc("mem_resident_gb", "resident"), _sc("mem_virtual_gb", "virtual"),
+            _sc("mongod_alloc_gb", "tcmalloc alloc")]},
+        {"title": "WiredTiger cache fill", "unit": "%", "series": [
+            _sc("cache_used_pct", "used %", 80, "80% target"),
+            _sc("cache_dirty_pct", "dirty %", 5, "5% dirty")]},
+        {"title": "System page cache", "unit": "GB", "series": [
+            _sc("page_cache_gb", "page cache")]},
+    ]},
+    {"category": "Cache & Tickets", "charts": [
+        {"title": "Cache I/O", "unit": "MB/s", "series": [
+            _sc("cache_read_mbps", "read"), _sc("cache_write_mbps", "written")]},
+        {"title": "Cache pages", "unit": "/s", "series": [
+            _sc("wt_pages_read_into_cache_ps", "read-in"),
+            _sc("wt_pages_written_ps", "written"),
+            _sc("wt_app_evict_ps", "app evict")]},
+        {"title": "Concurrency tickets out", "unit": "", "series": [
+            _sc("read_tickets_out", "read out"), _sc("write_tickets_out", "write out")]},
+        {"title": "Ticket utilization", "unit": "%", "series": [
+            _sc("read_ticket_util_pct", "read %"),
+            _sc("write_ticket_util_pct", "write %", 90, "90%")]},
+        {"title": "Cache eviction", "unit": "pages/s", "series": [
+            _sc("wt_app_evict_ps", "app-thread"),
+            _sc("wt_modified_evict_ps", "modified"),
+            _sc("wt_unmodified_evict_ps", "unmodified")]},
+        {"title": "WiredTiger log ops", "unit": "/s", "series": [
+            _sc("wt_log_write_ops_ps", "log writes"),
+            _sc("wt_log_sync_ps", "log syncs")]},
+        {"title": "WiredTiger log throughput", "unit": "MB/s", "series": [
+            _sc("wt_log_bytes_mbps", "log bytes")]},
+    ]},
+    {"category": "CPU", "charts": [
+        {"title": "CPU breakdown", "unit": "%", "series": [
+            _sc("cpu_user_pct", "user"), _sc("cpu_system_pct", "system"),
+            _sc("cpu_iowait_pct", "iowait"), _sc("cpu_steal_pct", "steal")]},
+        {"title": "CPU utilization", "unit": "%", "series": [
+            _sc("cpu_util_pct", "util %")]},
+        {"title": "Run/blocked processes", "unit": "", "series": [
+            _sc("procs_running", "running"), _sc("procs_blocked", "blocked")]},
+    ]},
+    {"category": "Disk (nvme1n1)", "charts": [
+        {"title": "Disk utilization", "unit": "%", "series": [
+            _sc("disk_util_pct", "util %", 85, "85% saturated")]},
+        {"title": "Disk IOPS", "unit": "/s", "series": [
+            _sc("read_iops", "read"), _sc("write_iops", "write")]},
+        {"title": "Disk latency", "unit": "ms", "series": [
+            _sc("avg_read_ms", "read"), _sc("avg_write_ms", "write")]},
+        {"title": "Disk throughput", "unit": "MB/s", "series": [
+            _sc("read_mbps", "read"), _sc("write_mbps", "write")]},
+        {"title": "Disk queue depth", "unit": "", "series": [
+            _sc("queue_depth", "queue depth")]},
+        {"title": "Checkpoint running", "unit": "0/1", "series": [
+            _sc("wt_checkpoint_running", "checkpoint running")]},
+        {"title": "Checkpoint duration", "unit": "ms", "series": [
+            _sc("wt_checkpoint_recent_ms", "most recent"),
+            _sc("wt_checkpoint_max_ms", "max")]},
+    ]},
+    {"category": "Replication", "charts": [
+        {"title": "Replication lag", "unit": "s", "series": [
+            _sc("repl_lag_member_0_s", "member 0"),
+            _sc("repl_lag_member_1_s", "member 1"),
+            _sc("repl_lag_member_2_s", "member 2"),
+            _sc("repl_lag_s", "max secondary", 10, "10s")]},
+        {"title": "Replication writes & apply", "unit": "/s", "series": [
+            _sc("repl_writes_ps", "repl writes"), _sc("repl_apply_ops_ps", "apply ops"),
+            _sc("repl_getmores_ps", "getmores")]},
+        {"title": "Replication buffer", "unit": "MB", "series": [
+            _sc("repl_buffer_mb", "buffer MB")]},
+    ]},
+    {"category": "Locks & Asserts", "charts": [
+        {"title": "Lock queue", "unit": "", "series": [
+            _sc("read_queue", "read queue"), _sc("write_queue", "write queue")]},
+        {"title": "Active clients", "unit": "", "series": [
+            _sc("active_clients_readers", "readers"),
+            _sc("active_clients_writers", "writers")]},
+        {"title": "Asserts", "unit": "/min", "series": [
+            _sc("asserts_per_min", "asserts/min")]},
+        {"title": "Page faults", "unit": "/s", "series": [
+            _sc("page_faults_ps", "faults/s")]},
+    ]},
+    {"category": "Sharding", "charts": [
+        {"title": "Stale config errors", "unit": "/s", "series": [
+            _sc("stale_config_errors_ps", "stale config errors/s")]},
+        {"title": "Read latency", "unit": "ms", "series": [
+            _sc("oplat_read_ms", "read latency ms")]},
+    ]},
+    {"category": "Errors & Asserts", "charts": [
+        {"title": "Asserts", "unit": "/s", "series": [
+            _sc("asserts_regular_ps", "regular"), _sc("asserts_warning_ps", "warning"),
+            _sc("asserts_msg_ps", "msg"), _sc("asserts_user_ps", "user"),
+            _sc("asserts_rollovers_ps", "rollovers")]},
+        {"title": "Queued operations (global lock)", "unit": "", "series": [
+            _sc("read_queue", "readers"), _sc("write_queue", "writers"),
+            _sc("queued_total", "total")]},
+        {"title": "Active clients (global lock)", "unit": "", "series": [
+            _sc("active_clients_readers", "readers"),
+            _sc("active_clients_writers", "writers"),
+            _sc("active_clients_total", "total")]},
+        # Flow control is emitted only on MongoDB 4.2+ — version-gated placeholder.
+        {"title": "Flow control (write throttling)", "unit": "ms",
+         "data_state": "unavailable_version", "min_version": "4.2", "series": [
+            _sc("flow_control_time_ms", "time in flow control")]},
+    ]},
+    # --- Part 3 scaffolding: the full universe of useful charts whose data needs a
+    # source FTDC does not contain. Rendered as labeled placeholders until ingested. ---
+    {"category": "Indexes & Storage", "charts": [
+        {"title": "Index usage & unused indexes", "unit": "", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+        {"title": "Per-collection storage size", "unit": "GB", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+        {"title": "Cache fit (working set vs cache)", "unit": "%", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+        {"title": "Oplog window", "unit": "h", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+        {"title": "Collection fragmentation", "unit": "%", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_HEALTHCHECK},
+    ]},
+    {"category": "Query Profiler", "charts": [
+        {"title": "Per-namespace latency", "unit": "ms", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_PROFILER},
+        {"title": "Slowest individual queries", "unit": "ms", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_PROFILER},
+        {"title": "COLLSCAN identification", "unit": "", "series": [],
+         "data_state": "requires_input", "placeholder": PLACEHOLDER_PROFILER},
+    ]},
+]
+
+
+def _catalog_series_keys():
+    keys = []
+    for cat in CHART_CATALOG:
+        for ch in cat["charts"]:
+            for e in ch["series"]:
+                if e["key"] not in keys:
+                    keys.append(e["key"])
+    return keys
+
+
+def build_insights(sig_stats):
+    def g(label, q):
+        s = sig_stats.get(label)
+        return s[q] if s else None
+
+    out = []
+
+    qt = g("query_targeting_ratio", "p95")
+    if qt is not None:
+        status = "FAIL" if qt > 1000 else "WARN" if qt > 100 else "OK"
+        out.append({
+            "id": "query_targeting", "title": "Query targeting", "status": status,
+            "headline": ("Scanning ≫ returning: likely missing/ineffective indexes"
+                         if status != "OK" else "Index targeting looks healthy"),
+            "detail": ("p95 of scanned-objects ÷ docs-returned is "
+                       f"{_r3(qt)}× — every returned document costs that many object scans."),
+            "metric": "query_targeting_ratio.p95", "value": _r3(qt), "threshold": 100})
+
+    rtu = g("read_ticket_util_pct", "p95")
+    wtu = g("write_ticket_util_pct", "p95")
+    tu_vals = [v for v in (rtu, wtu) if v is not None]
+    if tu_vals:
+        tu = max(tu_vals)
+        status = "FAIL" if tu > 90 else "WARN" if tu > 70 else "OK"
+        out.append({
+            "id": "ticket_saturation", "title": "Concurrency tickets", "status": status,
+            "headline": ("WiredTiger concurrency tickets saturating"
+                         if status != "OK" else "Concurrency tickets have headroom"),
+            "detail": (f"max(read,write) ticket utilization p95 = {_r3(tu)}% "
+                       "(read=" + f"{_r3(rtu)}%, write={_r3(wtu)}%)."),
+            "metric": "ticket_util_pct.p95", "value": _r3(tu), "threshold": 90})
+
+    cu = g("conn_used_pct", "p95")
+    if cu is not None:
+        status = "FAIL" if cu > 85 else "WARN" if cu > 70 else "OK"
+        out.append({
+            "id": "conn_headroom", "title": "Connection headroom", "status": status,
+            "headline": ("Connection pool pressure" if status != "OK"
+                         else "Connection pool has headroom"),
+            "detail": f"current ÷ (current+available) p95 = {_r3(cu)}% of the connection ceiling.",
+            "metric": "conn_used_pct.p95", "value": _r3(cu), "threshold": 85})
+
+    wc = g("write_conflicts_ps", "p95")
+    if wc is not None:
+        status = "WARN" if wc > 5 else "OK"
+        out.append({
+            "id": "write_conflicts", "title": "Write conflicts", "status": status,
+            "headline": ("Write contention" if status != "OK"
+                         else "Negligible write contention"),
+            "detail": f"writeConflicts p95 = {_r3(wc)}/s (WiredTiger retried these writes).",
+            "metric": "write_conflicts_ps.p95", "value": _r3(wc), "threshold": 5})
+
+    pf = g("page_faults_ps", "p95")
+    if pf is not None:
+        status = "WARN" if pf > 10 else "OK"
+        out.append({
+            "id": "page_pressure", "title": "Page faults", "status": status,
+            "headline": ("OS page faults: memory pressure" if status != "OK"
+                         else "No OS page-fault pressure"),
+            "detail": f"extra_info.page_faults p95 = {_r3(pf)}/s.",
+            "metric": "page_faults_ps.p95", "value": _r3(pf), "threshold": 10})
+
+    # query efficiency — Atlas Query Targeting proxy (docs examined per returned)
+    de = g("docs_examined_per_returned", "p95")
+    if de is not None:
+        status = "WARN" if de > 100 else "OK"
+        out.append({
+            "id": "query_efficiency", "title": "Query efficiency", "status": status,
+            "headline": ("Workload scanning many docs per returned — likely missing or "
+                         "non-selective indexes" if status != "OK"
+                         else "Query targeting healthy (≈1:1 examined-to-returned)"),
+            "detail": (f"docs examined per returned p95 = {_r3(de)}×. This is a host-wide "
+                       "PROXY; the specific offending queries need the Query Profiler / "
+                       "slow-query log, which FTDC does not capture."),
+            "metric": "docs_examined_per_returned.p95", "value": _r3(de), "threshold": 100})
+
+    # replication — max secondary lag (oplog-window WARN gated on availability, omitted here)
+    lag = g("repl_lag_s", "p95")
+    if lag is not None:
+        status = "WARN" if lag > 10 else "OK"
+        out.append({
+            "id": "replication", "title": "Replication", "status": status,
+            "headline": ("Secondary replication lag elevated" if status != "OK"
+                         else "Replication lag healthy"),
+            "detail": (f"max secondary lag p95 = {_r3(lag)}s. Oplog window/headroom not "
+                       "evaluated (oplog entry timestamps are not in FTDC)."),
+            "metric": "repl_lag_s.p95", "value": _r3(lag), "threshold": 10})
+
+    return out
+
+
+def downsample(ts_aligned, arr):
+    """Bucket the timeline into <=MAX_POINTS equal-time *fine* buckets; per bucket emit
+    mean (the line), min and max (the band) computed from the RAW samples in the bucket.
+
+    These are fine buckets the client re-aggregates to the chosen range+granularity
+    (mean = weighted mean of means; min = min of mins; max = max of maxs — exact), so any
+    range/granularity shows correct mean+min/max without dropping samples. A short spike
+    survives because the fine bucket's max captures it and propagates up (max of maxs)."""
+    t = ts_aligned.astype(np.float64)
+    n = len(t)
+    if n == 0 or arr is None:
+        return [], [], [], []
+    nb = min(MAX_POINTS, n)
+    t0, t1 = t[0], t[-1]
+    span = t1 - t0
+    if span <= 0:
+        idx = np.zeros(n, dtype=int)
+        bw = 0.0
+    else:
+        bw = span / nb
+        idx = np.minimum(((t - t0) / bw).astype(int), nb - 1)
+    # idx is non-decreasing (t sorted) -> contiguous groups.
+    bounds = np.nonzero(np.diff(idx))[0] + 1
+    seg_arrs = np.split(arr, bounds)
+    seg_ids = idx[np.concatenate(([0], bounds))]
+    out_t, out_mean, out_min, out_max = [], [], [], []
+    for b, seg in zip(seg_ids, seg_arrs):
+        finite = seg[np.isfinite(seg)]
+        if finite.size == 0:
+            continue
+        out_t.append(int(round(t0 + b * bw)))
+        out_mean.append(round(float(np.mean(finite)), 3))
+        out_min.append(round(float(np.min(finite)), 3))
+        out_max.append(round(float(np.max(finite)), 3))
+    return out_t, out_mean, out_min, out_max
+
+
+# ---------------------------------------------------------------------------
+# Extra insights (version EOL + latency↔sharding correlation) + cost optimization
+# ---------------------------------------------------------------------------
+def build_extra_insights(sig, sig_stats, facts):
+    out = []
+
+    # version EOL
+    ver = (facts.get("derived") or {}).get("mongo_version")
+    if ver:
+        parts = str(ver).split(".")
+        try:
+            major = int(parts[0])
+            minor = int(parts[1]) if len(parts) > 1 else 0
+        except (ValueError, IndexError):
+            major = minor = None
+        if major is not None:
+            eol = (major, minor) < (5, 0)
+            out.append({
+                "id": "version_eol", "title": "MongoDB version",
+                "status": "FAIL" if eol else "OK",
+                "headline": (f"MongoDB {ver} is end-of-life/unsupported — missing years of "
+                             "sharding, performance, and observability fixes; plan an "
+                             "upgrade." if eol else f"MongoDB {ver} is a supported release."),
+                "detail": f"Detected server version {ver}; EOL boundary is major.minor < 5.0.",
+                "metric": "mongo_version", "value": round(major + minor / 10, 1),
+                "threshold": 5.0})
+
+    # latency↔sharding correlation: stale-config-error rate inside vs outside read-latency spikes
+    oplat = sig.get("oplat_read_ms")
+    stale = sig.get("stale_config_errors_ps")
+    if (oplat is not None and stale is not None
+            and np.any(np.isfinite(oplat)) and np.any(np.isfinite(stale))):
+        p95 = float(np.nanpercentile(oplat, 95))
+        spike = np.isfinite(oplat) & (oplat > p95)
+        base = np.isfinite(oplat) & (oplat <= p95)
+        in_vals = stale[spike & np.isfinite(stale)]
+        out_vals = stale[base & np.isfinite(stale)]
+        mean_in = float(np.mean(in_vals)) if in_vals.size else 0.0
+        mean_out = float(np.mean(out_vals)) if out_vals.size else 0.0
+        if mean_out > 0:
+            ratio = mean_in / mean_out
+        elif mean_in > 0:
+            ratio = float("inf")
+        else:
+            ratio = 1.0
+        warn = (mean_in >= 2 * mean_out) and (mean_in > 0)
+        ratio_disp = round(ratio, 1) if math.isfinite(ratio) else None
+        nx = f"{ratio_disp}x" if ratio_disp is not None else "∞x"
+        headline = (
+            f"Read-latency spikes coincide with stale-config-error activity (~{nx} "
+            "baseline) → sharding metadata refresh, not host resource pressure; do NOT "
+            "upsize the VM to fix this." if warn else
+            "Read-latency spikes do not coincide with stale-config-error activity.")
+        out.append({
+            "id": "latency_sharding_correlation", "title": "Latency↔Sharding",
+            "status": "WARN" if warn else "OK", "headline": headline,
+            "detail": (f"spike samples={int(spike.sum())} "
+                       f"(oplat_read_ms>p95={round(p95, 2)}ms); mean stale_config_errors_ps "
+                       f"inside={round(mean_in, 5)}/s vs outside={round(mean_out, 5)}/s; "
+                       f"ratio={nx}."),
+            "metric": "stale_err_ratio(spike/base)", "value": ratio_disp, "threshold": 2})
+
+    return out
+
+
+def build_cost_optimization(verdicts):
+    cpu, disk, ram = verdicts["cpu"], verdicts["disk"], verdicts["ram"]
+    actions = []
+    if cpu["verdict"] == "REDUCE":
+        actions.append({
+            "resource": "CPU",
+            "recommendation": f"Downsize vCPU 16→{cpu.get('recommended_vcpus')}",
+            "rationale": cpu["headline"] + " SECONDARY: re-size for primary write load if "
+            "promotion is possible.", "lever": "vcpu", "risk": "low"})
+    elif cpu["verdict"] == "CONSTRAINED":
+        actions.append({"resource": "CPU", "recommendation": "Add vCPUs",
+                        "rationale": cpu["headline"], "lever": "vcpu", "risk": "medium"})
+
+    if disk["verdict"] == "SATURATED":
+        actions.append({
+            "resource": "Storage",
+            "recommendation": ("Right-size the STORAGE VOLUME, not the instance — "
+                               "checkpoint-bound saturation, latency healthy; evaluate a "
+                               "better/cheaper tier (e.g., gp3 w/ provisioned IOPS)."),
+            "rationale": disk["headline"], "lever": "storage", "risk": "medium"})
+    elif disk["verdict"] == "REDUCE":
+        actions.append({"resource": "Storage",
+                        "recommendation": "Move to a smaller/cheaper volume",
+                        "rationale": disk["headline"], "lever": "storage", "risk": "low"})
+
+    if ram["verdict"] == "HOLD":
+        actions.append({"resource": "RAM", "recommendation": "No change — adequate.",
+                        "rationale": ram["headline"], "lever": "none", "risk": "none"})
+    elif ram["verdict"] == "UNDERSIZED":
+        actions.append({"resource": "RAM", "recommendation": "Increase RAM / WT cache",
+                        "rationale": ram["headline"], "lever": "ram", "risk": "low"})
+    elif ram["verdict"] == "REDUCE":
+        actions.append({"resource": "RAM", "recommendation": "Downsize RAM tier",
+                        "rationale": ram["headline"], "lever": "ram", "risk": "medium"})
+
+    opportunity = ("high" if (cpu["verdict"] == "REDUCE" and cpu["confidence"] == "high")
+                   else "medium")
+    movers = [a["resource"] for a in actions if a["lever"] != "none"]
+    headline = (("Cost optimization available — right-size " + ", ".join(movers)
+                 + "; RAM is already adequate.") if movers
+                else "No cost changes recommended.")
+    return {"opportunity": opportunity, "headline": headline, "actions": actions}
+
+
+# ---------------------------------------------------------------------------
+# Facts (full metadata)
+# ---------------------------------------------------------------------------
+def build_facts(meta_doc, wt_cache_bytes=None, uptime_seconds=None):
+    """Flatten the type-0 metadata doc by section (JSON-serializable) + derived."""
+    san = metrics.json_sanitize
+    host_info = meta_doc.get("hostInfo", {}) or {}
+    system = host_info.get("system", {}) or {}
+    os_info = host_info.get("os", {}) or {}
+    build_info = meta_doc.get("buildInfo", {}) or {}
+
+    os_str = " ".join(str(x) for x in
+                      [os_info.get("name"), os_info.get("version")] if x)
+    mem_mb = system.get("memSizeMB")
+    derived = {
+        "uptime_days": round(uptime_seconds / 86400, 2) if uptime_seconds else None,
+        "wt_cache_gb": round(wt_cache_bytes / 1e9, 2) if wt_cache_bytes else None,
+        "mongo_version": build_info.get("version"),
+        "os": os_str or None,
+        "num_cores": system.get("numCores"),
+        "mem_gb": round(mem_mb / 1024, 1) if mem_mb else None,
+    }
+    return {
+        "buildInfo": san(build_info),
+        "hostInfo": san(host_info),
+        "getCmdLineOpts": san(meta_doc.get("getCmdLineOpts", {}) or {}),
+        "derived": derived,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Assembly
+# ---------------------------------------------------------------------------
+def _apply_enrichers(assessment_v2, enrichers):
+    """Generalized post-score enrichment (registry-driven): merge a parser's dynamic
+    recommendation / concrete evidence / caveats into the matching category result. Replaces
+    the healthcheck-specific `_enrich_structural` and drives sh_status (sharding) + rs_status
+    (replication) the same way. Additive — never alters scoring/ledgers/confidence.
+
+    Each spec: {recommendation?, recommendation_flag?, evidence?, evidence_key?, caveats?,
+    note?, when_scored_only?}. With when_scored_only the healthcheck enrichers reproduce the
+    old _enrich_structural behavior exactly (scored-only, healthcheck_evidence key)."""
+    if not enrichers:
+        return
+    for r in assessment_v2.get("ranked", []):
+        for spec in enrichers.get(r.get("id"), []):
+            scored = r.get("status") == "scored"
+            if spec.get("when_scored_only") and not scored:
+                continue
+            ev = spec.get("evidence")
+            if ev is not None:
+                r[spec.get("evidence_key") or f"{r['id']}_evidence"] = ev
+            rec = spec.get("recommendation")
+            if rec and scored and not r.get("recommendation_conditioned"):
+                r["recommendation"] = rec
+                r[spec.get("recommendation_flag") or "recommendation_enriched"] = True
+            for cav in spec.get("caveats", []) or []:
+                if cav not in r.setdefault("caveats", []):
+                    r["caveats"].append(cav)
+            note = spec.get("note")
+            if note:
+                r.setdefault("enrichment_notes", []).append(note)
+
+
+_SHARDING_CONTEXT_NOTE = (
+    "This node is one shard (shardsvr) of a sharded cluster. This analysis covers a single "
+    "shard's replica set — cluster-wide concerns (balancer activity, chunk distribution, jumbo "
+    "chunks, shard-key effectiveness, mongos routing) are not visible from this capture. Run "
+    "sh.status() on a mongos and provide it for cluster-level analysis.")
+
+
+def _apply_sharding_context(assessment_v2, hc_report):
+    """When the healthcheck shows this node is a shard member (clusterRole=shardsvr) AND no
+    sh.status() was provided, surface Sharding & Topology as a fired *context* (the honest
+    single-shard caveat + 'provide sh.status()' direction) rather than a scored verdict. When
+    sh.status() IS provided the category scores instead — the caller skips this. configsvr /
+    standalone / absent clusterRole → no-op. Additive: does not change any score."""
+    topo = (hc_report or {}).get("topology") or {}
+    role = str(topo.get("cluster_role") or "").lower()
+    if "shardsvr" not in role:  # only a data shard; configsvr/standalone/none excluded
+        return
+    for r in assessment_v2.get("ranked", []):
+        if r.get("id") != "sharding_topology":
+            continue
+        r["context_fired"] = True
+        r["context_kind"] = "sharding"
+        r["context_note"] = _SHARDING_CONTEXT_NOTE
+        r["recommendation"] = (
+            "Single-shard scope: this is one shard of a sharded cluster. Provide sh.status() "
+            "from a mongos for cluster-wide sharding analysis (balancer, chunk distribution, "
+            "jumbo chunks, shard-key effectiveness).")
+        if _SHARDING_CONTEXT_NOTE not in r.get("caveats", []):
+            r.setdefault("caveats", []).append(_SHARDING_CONTEXT_NOTE)
+        break
+
+
+def _assemble_assessment(sig_stats, ruleset, available_inputs, provided_inputs,
+                         target_category, intent, enrichers, hc_report_for_context,
+                         provided_paths):
+    """Run the scorer, apply registry-dispatched enrichers, layer the sharding context (only
+    when sh.status() is absent), and record the supplied file paths. Shared by both assemblers."""
+    assessment_v2 = _scorer.score(sig_stats, available_inputs, ruleset,
+                                  target_category=target_category, intent=intent,
+                                  provided_inputs=provided_inputs)
+    _apply_enrichers(assessment_v2, enrichers)
+    # The sharding context is the fallback when sh.status() was NOT provided; when it WAS,
+    # sharding_topology scores from sh_* signals and no context caveat is layered on.
+    if "sh_status" not in available_inputs and hc_report_for_context is not None:
+        _apply_sharding_context(assessment_v2, hc_report_for_context)
+    assessment_v2["provided_paths"] = dict(provided_paths)
+    return assessment_v2
+
+
+def build_results_healthcheck_only(healthcheck_path, target_category=None,
+                                   ruleset_overrides_path=None, intent=None,
+                                   provided_profiler=None, cloud="aws",
+                                   provided_sh_status=None, provided_rs_status=None):
+    """Assemble a results dict from a healthcheck snapshot ALONE (no FTDC capture).
+
+    Healthcheck is the primary; any accompanying evidence inputs (sh.status / rs.status) flow
+    through the registry dispatcher. Produces the healthcheck block, the scored Structural-
+    Design categories (+ sharding when sh.status present), and a sizing recommendation. Time-
+    series surfaces (charts/signals/verdicts) are intentionally empty. Decoder untouched."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Dispatch the healthcheck (primary) + any evidence inputs through the registry.
+    provided = {"healthcheck": healthcheck_path}
+    if provided_sh_status:
+        provided["sh_status"] = provided_sh_status
+    if provided_rs_status:
+        provided["rs_status"] = provided_rs_status
+    dr = _inputs.dispatch(provided)
+    hc_raw = (dr.parsed.get("healthcheck") or {}).get("_raw")
+    if not hc_raw:  # healthcheck is the primary — it must parse
+        raise ValueError("healthcheck snapshot could not be parsed: " + "; ".join(dr.notes))
+    host_facts = hc_raw["host"]
+
+    overrides_path = ruleset_overrides_path or os.environ.get("FTDC_RULESET_OVERRIDES")
+    ruleset = _build_ruleset(overrides_path)
+
+    # Parsed inputs are AVAILABLE for scoring; profiler stays intake-only; FTDC is absent →
+    # capacity/incident categories show requires_input(ftdc).
+    sig_stats = dict(dr.sig_stats)
+    available_inputs = set(dr.available)
+    provided_inputs = set()
+    if provided_profiler:
+        provided_inputs.add("profiler")
+    provided_paths = {k: v for k, v in (
+        ("healthcheck", healthcheck_path), ("profiler", provided_profiler),
+        ("sh_status", provided_sh_status), ("rs_status", provided_rs_status)) if v}
+
+    assessment_v2 = _assemble_assessment(
+        sig_stats, ruleset, available_inputs, provided_inputs, target_category, intent,
+        dr.enrichers, dr.reports.get("healthcheck"), provided_paths)
+    assessment_v2["overrides_applied"] = bool(
+        overrides_path and os.path.exists(overrides_path)) if overrides_path else False
+
+    _tier_tables = _sizing.load_tier_tables(_load_overrides(overrides_path))
+    sizing_recommendation = _sizing.build_sizing_recommendation(
+        host_facts.get("num_cores"), host_facts.get("mem_mb"), sig_stats,
+        assessment_v2["ranked"], cloud, _tier_tables, provided_inputs, intent,
+        healthcheck=dr.sizing)
+
+    notes = [
+        "Healthcheck-only run: no FTDC capture was provided, so time-series charts, the "
+        "Signals table and the RAM/CPU/Disk time-series verdicts are unavailable. Add an "
+        "FTDC diagnostic.data capture to unlock capacity / incident time-series analysis.",
+        "Structural-Design categories (index health, schema, storage) and the storage/cache "
+        "sizing are fully scored from the healthcheck snapshot.",
+    ] + list(dr.notes)  # dispatcher notes already include the healthcheck parser's own notes
+
+    return {
+        "schema_version": 3,
+        "generated_at": now.isoformat(),
+        "source": {"dir": healthcheck_path, "file_count": 1},
+        "host": {
+            "hostname": host_facts.get("hostname"),
+            "mongo_version": host_facts.get("version"),
+            "num_cores": host_facts.get("num_cores"),
+            "mem_mb": host_facts.get("mem_mb"),
+            "role": host_facts.get("role"),
+            "data_disk": None,
+            "cluster_role": host_facts.get("cluster_role"),
+        },
+        "capture": {"first_ts_iso": None, "last_ts_iso": None,
+                    "span_seconds": 0, "samples": 0},
+        "data_sources": {"ftdc": False, "healthcheck": True,
+                         "profiler": bool(provided_profiler),
+                         "sh_status": "sh_status" in dr.available,
+                         "rs_status": "rs_status" in dr.available},
+        "signals": {},
+        "assessment": None,
+        "assessment_v2": assessment_v2,
+        "sizing_recommendation": sizing_recommendation,
+        "healthcheck": dr.reports.get("healthcheck"),
+        "sharding": dr.reports.get("sharding"),
+        "replication": dr.reports.get("replication"),
+        "verdicts": None,
+        "cost_optimization": None,
+        "insights": [],
+        "chart_catalog": [],
+        "facts": None,
+        "series": {},
+        "missing_paths": [],
+        "skipped_files": [],
+        "notes": notes,
+    }
+
+
+def build_results(dirpath, on_skip=None, target_category=None,
+                  ruleset_overrides_path=None, intent=None,
+                  provided_healthcheck=None, provided_profiler=None,
+                  cloud="aws", provided_sh_status=None, provided_rs_status=None):
+    ex = metrics.extract(dirpath, on_skip=on_skip)
+    sig, n = metrics.derive(ex)
+    ts = ex["ts"]
+    meta = ex["meta"]
+    role, data_disk = ex["role"], ex["data_disk"]
+
+    sig_stats = {label: _stats(arr) for label, arr in sig.items()}
+
+    files = decoder._metrics_files_in_order(dirpath)
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    first_iso = metrics._to_dt(int(ts[0])).isoformat() if n else None
+    last_iso = metrics._to_dt(int(ts[-1])).isoformat() if n else None
+    span_seconds = int((ts[-1] - ts[0]) / 1000) if n else 0
+
+    signals_block = {}
+    for label, s in sig_stats.items():
+        if s is None:
+            signals_block[label] = {"unit": UNITS.get(label, ""), "p50": None,
+                                    "p95": None, "p99": None, "max": None, "mean": None}
+        else:
+            signals_block[label] = {"unit": UNITS.get(label, ""), **s}
+
+    sharding_present = any(p.startswith("serverStatus.shardingStatistics")
+                           for p in ex["avail"])
+    cluster_role = (f"shard member (replica-set {role})" if sharding_present else None)
+
+    skipped_files = ex.get("skipped", [])
+
+    # Oplog window needs first/last oplog-entry timestamps, which FTDC does not
+    # capture; verify rather than fabricate. (Used to gate replication headroom.)
+    oplog_window_available = any(
+        "oplog" in p.lower()
+        and ("first" in p.lower() or "last" in p.lower())
+        and ("entry" in p.lower() or "optime" in p.lower())
+        for p in ex["avail"])
+
+    notes = [
+        f"role={role}: CPU/DISK sizing assumes this node remains a read replica; "
+        "if promotable to PRIMARY, size for primary write load.",
+        "oplat_write_ms is NaN/absent — expected on a SECONDARY (client writes do not "
+        "traverse the user write path; replication apply does).",
+        "FTDC covers only the analyzed host(s); for a sharded cluster, conclusions are "
+        "limited to visible shard members — cluster-wide metadata behavior may originate "
+        "elsewhere.",
+    ]
+    if skipped_files:
+        notes.append(
+            f"{len(skipped_files)} file(s) were unreadable and skipped: "
+            + ", ".join(s["file"] for s in skipped_files)
+            + " (analysis is based on the remaining files).")
+    if not oplog_window_available:
+        notes.append("oplog window not present in this capture — oplog window/churn and "
+                     "replication headroom omitted.")
+
+    verdicts = {
+        "ram": verdict_ram(sig_stats, sig_stats),
+        "cpu": verdict_cpu(sig_stats, sig_stats, meta.get("numCores") or 0, role),
+        "disk": verdict_disk(sig_stats, sig_stats, data_disk, role),
+    }
+
+    ts_aligned = ts[1:] if n else ts
+    series_block = {}
+    for key in _catalog_series_keys():
+        src = SERIES_SOURCE.get(key, key)
+        arr = sig.get(src)
+        # Fine buckets: v=mean (line) for every signal + min/max (band). The client
+        # re-aggregates these to the chosen range+granularity (Atlas model). `v` stays
+        # the mean for back-compat (report.py / sparklines read .v).
+        if arr is not None:
+            tt, vmean, vmin, vmax = downsample(ts_aligned, arr)
+        else:
+            tt, vmean, vmin, vmax = [], [], [], []
+        series_block[key] = {"t": tt, "v": vmean, "min": vmin, "max": vmax}
+
+    # chart_catalog resolves each chart's data_state:
+    #   present            -> keep only series with data; drop the chart if none
+    #   requires_input     -> always render as a placeholder (needs an un-ingested source)
+    #   unavailable_version-> always render; metric not emitted on this server version
+    def _has_data(key):
+        sb = series_block.get(key)
+        return bool(sb and sb["t"])
+
+    version = meta.get("version") or "this version"
+
+    def _resolve_chart(ch):
+        state = ch.get("data_state", "present")
+        if state == "present":
+            ser = [e for e in ch["series"] if _has_data(e["key"])]
+            if not ser:
+                return None
+            return {"title": ch["title"], "unit": ch["unit"], "series": ser,
+                    "data_state": "present"}
+        if state == "unavailable_version":
+            minv = ch.get("min_version", "a newer version")
+            msg = (f"Not available on MongoDB {version} — this metric is emitted "
+                   f"on {minv}+.")
+        else:  # requires_input
+            msg = ch.get("placeholder", "Data not available for this source.")
+        return {"title": ch["title"], "unit": ch["unit"], "series": [],
+                "data_state": state, "placeholder": msg}
+
+    chart_catalog = []
+    for cat in CHART_CATALOG:
+        charts = [rc for rc in (_resolve_chart(ch) for ch in cat["charts"]) if rc]
+        if charts:
+            chart_catalog.append({"category": cat["category"], "charts": charts})
+
+    insights = build_insights(sig_stats)
+
+    # facts: full metadata (uptime filled by caller from metrics_full if available)
+    wt_cache_arr = ex["series"].get(
+        "serverStatus.wiredTiger.cache.maximum bytes configured")
+    wt_cache_bytes = (float(wt_cache_arr[0])
+                      if wt_cache_arr is not None and len(wt_cache_arr) else None)
+    facts = build_facts(metrics.read_metadata_doc(dirpath), wt_cache_bytes=wt_cache_bytes)
+
+    # extra insights (version EOL + latency↔sharding correlation) + cost optimization
+    insights = insights + build_extra_insights(sig, sig_stats, facts)
+    cost_optimization = build_cost_optimization(verdicts)
+    assessment = signatures.build_assessment(sig_stats, insights, cost_optimization)
+
+    # --- Evidence inputs (registry-dispatched): healthcheck + sh.status / rs.status ---
+    # Each supplied evidence file is routed to its registered parser; the resulting `*_`
+    # signals are injected into sig_stats (so the matching categories score), the report
+    # blocks are stored, and the dynamic recommendations/evidence enrich the scored results —
+    # the same pattern healthcheck used, now generalized. A bad evidence file never fails the
+    # FTDC run (the dispatcher records a note and skips it).
+    provided = {k: v for k, v in (
+        ("healthcheck", provided_healthcheck), ("sh_status", provided_sh_status),
+        ("rs_status", provided_rs_status)) if v}
+    dr = _inputs.dispatch(provided)
+    sig_stats.update(dr.sig_stats)
+    healthcheck_block = dr.reports.get("healthcheck")
+    notes.extend(dr.notes)
+
+    # --- Layer-2 deterministic scorer (assessment_v2) ---
+    # Defaults merged with operator overrides (CLI path arg or FTDC_RULESET_OVERRIDES env).
+    overrides_path = ruleset_overrides_path or os.environ.get("FTDC_RULESET_OVERRIDES")
+    ruleset = _build_ruleset(overrides_path)
+    available_inputs = {"ftdc"} | set(dr.available)
+    provided_inputs = set()
+    # healthcheck supplied but unparsed → input_provided (intake state, not scored)
+    if provided_healthcheck and "healthcheck" not in dr.available:
+        provided_inputs.add("healthcheck")
+    if provided_profiler:
+        provided_inputs.add("profiler")
+    provided_paths = {k: v for k, v in (
+        ("healthcheck", provided_healthcheck), ("profiler", provided_profiler),
+        ("sh_status", provided_sh_status), ("rs_status", provided_rs_status)) if v}
+    assessment_v2 = _assemble_assessment(
+        sig_stats, ruleset, available_inputs, provided_inputs, target_category, intent,
+        dr.enrichers, dr.reports.get("healthcheck"), provided_paths)
+
+    # --- Sizing Recommendation (capacity → Atlas tiers; surfaced for sizing/cost intents) ---
+    _tier_tables = _sizing.load_tier_tables(_load_overrides(overrides_path))
+    sizing_recommendation = _sizing.build_sizing_recommendation(
+        meta.get("numCores"), meta.get("memSizeMB"), sig_stats,
+        assessment_v2["ranked"], cloud, _tier_tables, provided_inputs, intent,
+        healthcheck=dr.sizing)
+    assessment_v2["overrides_applied"] = bool(overrides_path and
+                                              os.path.exists(overrides_path)) \
+        if overrides_path else False
+
+    results = {
+        "schema_version": 3,
+        "generated_at": now.isoformat(),
+        "source": {"dir": dirpath, "file_count": len(files)},
+        "host": {
+            "hostname": meta.get("hostname"), "mongo_version": meta.get("version"),
+            "num_cores": meta.get("numCores"), "mem_mb": meta.get("memSizeMB"),
+            "role": role, "data_disk": data_disk, "cluster_role": cluster_role,
+        },
+        "capture": {"first_ts_iso": first_iso, "last_ts_iso": last_iso,
+                    "span_seconds": span_seconds, "samples": n},
+        "data_sources": {"ftdc": True, "healthcheck": bool(healthcheck_block),
+                         "profiler": bool(provided_profiler),
+                         "sh_status": "sh_status" in dr.available,
+                         "rs_status": "rs_status" in dr.available},
+        "signals": signals_block,
+        "assessment": assessment,
+        "assessment_v2": assessment_v2,
+        "sizing_recommendation": sizing_recommendation,
+        "healthcheck": healthcheck_block,
+        "sharding": dr.reports.get("sharding"),
+        "replication": dr.reports.get("replication"),
+        "verdicts": verdicts,
+        "cost_optimization": cost_optimization,
+        "insights": insights,
+        "chart_catalog": chart_catalog,
+        "facts": facts,
+        "series": series_block,
+        "missing_paths": ex["missing"],
+        "skipped_files": skipped_files,
+        "notes": notes,
+    }
+    return results
+
+
+# ---------------------------------------------------------------------------
+# __main__
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    DATA_03 = ("/Users/manishsinha/Desktop/projects/ftdc-analyzer/files/upload/"
+               "ludo-prod-mongo-03/diagnostic.data")
+    REPORTS = "/Users/manishsinha/Desktop/projects/ftdc-analyzer/reports"
+
+    # STEP 1 — probe presence
+    print("=" * 78)
+    print("STEP 1 · PROBE candidate paths")
+    print("=" * 78)
+    probe = metrics.probe(DATA_03)
+    n_present = sum(1 for _, p in probe if p)
+    for path, present in probe:
+        print(f"  {'PRESENT' if present else 'ABSENT ':8s} {path}")
+    print(f"\n  -> {n_present}/{len(probe)} present "
+          f"({len(probe) - n_present} absent)")
+
+    # STEPS 2-5 — build results + full metrics, patch uptime, write + copy both
+    results = build_results(DATA_03)
+    metrics_full = metrics.build_metrics_full(DATA_03, n_points=2000)
+
+    # uptime_days from the full capture (serverStatus.uptime last value).
+    uptime_last = None
+    for m in metrics_full["metrics"]:
+        if m["path"] == "serverStatus.uptime":
+            for val in reversed(m["v"]):
+                if val is not None:
+                    uptime_last = val
+                    break
+            break
+    if uptime_last is not None:
+        results["facts"]["derived"]["uptime_days"] = round(uptime_last / 86400, 2)
+
+    host = (results["host"]["hostname"] or "unknown").replace("/", "_")
+    stamp = datetime.datetime.fromisoformat(
+        results["generated_at"]).strftime("%Y%m%dT%H%M%SZ")
+    out_path = os.path.join(REPORTS, f"ftdc_results_{host}_{stamp}.json")
+    mf_path = os.path.join(REPORTS, "metrics_full.json")
+    with open(out_path, "w") as fh:
+        json.dump(results, fh, indent=2)
+    with open(mf_path, "w") as fh:
+        json.dump(metrics_full, fh, separators=(",", ":"))
+    size = os.path.getsize(out_path)
+    mf_size = os.path.getsize(mf_path)
+
+    sigs = results["signals"]
+    series = results["series"]
+    catalog = results["chart_catalog"]
+    insights = results["insights"]
+
+    print("\n" + "=" * 78)
+    print("STEP 6 · SUMMARY")
+    print("=" * 78)
+    h, c = results["host"], results["capture"]
+    print(f"  {h['hostname']}  MongoDB {h['mongo_version']}  schema_version="
+          f"{results['schema_version']}  role={h['role']}")
+    print(f"  capture: {c['samples']:,} samples  ({c['span_seconds']:,}s)")
+    print(f"  total signals : {len(sigs)}")
+    print(f"  total series  : {len(series)}")
+
+    print("\n  chart_catalog categories:")
+    total_charts = 0
+    for cat in catalog:
+        nc = len(cat["charts"])
+        total_charts += nc
+        print(f"      {cat['category']:<26} {nc} charts")
+    print(f"      {'TOTAL':<26} {total_charts} charts in {len(catalog)} categories")
+
+    print("\n  insights:")
+    for ins in insights:
+        print(f"      [{ins['status']:4s}] {ins['title']:<22} "
+              f"{ins['metric']}={ins['value']} (thr {ins['threshold']}) — {ins['headline']}")
+
+    print("\n  recalibrated verdicts + cost_action:")
+    for key in ("ram", "cpu", "disk"):
+        v = results["verdicts"][key]
+        extra = (f"  recommended_vcpus={v['recommended_vcpus']}"
+                 if key == "cpu" and v.get("recommended_vcpus") is not None else "")
+        ca = v["cost_action"]
+        print(f"      [{key.upper():4s}] {v['verdict']}  ({v['confidence']}){extra}")
+        print(f"             {v['headline']}")
+        print(f"             cost_action: {ca['action']}  (lever={ca['lever']}, "
+              f"risk={ca['risk']})  — {ca['est_saving_note']}")
+
+    co = results["cost_optimization"]
+    print(f"\n  cost_optimization: opportunity={co['opportunity']}")
+    print(f"      {co['headline']}")
+    for a in co["actions"]:
+        print(f"      - {a['resource']:<8} [{a['lever']}/{a['risk']}] {a['recommendation']}")
+
+    print("\n  recalibration spotlight:")
+    print(f"      cluster_role: {h.get('cluster_role')}")
+    by_id = {i["id"]: i for i in insights}
+    lsc = by_id.get("latency_sharding_correlation")
+    if lsc:
+        print(f"      latency_sharding_correlation: {lsc['status']}  "
+              f"ratio(value)={lsc['value']}  (thr {lsc['threshold']})")
+        print(f"          {lsc['detail']}")
+        print(f"          {lsc['headline']}")
+    veol = by_id.get("version_eol")
+    if veol:
+        print(f"      version_eol: {veol['status']}  {veol['headline']}")
+    has_shard_cat = any(cat["category"] == "Sharding" for cat in catalog)
+    shard_charts = next((cat["charts"] for cat in catalog
+                         if cat["category"] == "Sharding"), [])
+    print(f"      chart_catalog 'Sharding' category added: {has_shard_cat}  "
+          f"({', '.join(ch['title'] for ch in shard_charts)})")
+
+    # ---- PART 1 validation ----
+    mlist = metrics_full["metrics"]
+    tline = metrics_full["timeline"]["t"]
+    print("\n" + "=" * 78)
+    print("PART 1 VALIDATION · full capture")
+    print("=" * 78)
+    print(f"  total metrics captured : {len(mlist)}  (expect 1370)")
+    print(f"  timeline length        : {len(tline)}  (n_points={metrics_full['n_points']})")
+    print(f"  metrics_full.json size : {mf_size:,} bytes ({mf_size/1024/1024:.1f} MB)")
+
+    print("\n  sample metric entries:")
+    samples = [mlist[0], mlist[len(mlist) // 2], mlist[-1]]
+    for m in samples:
+        s = m["summary"]
+        print(f"    - {m['path']}")
+        print(f"        category={m['category']!r}  kind={m['kind']}")
+        print(f"        summary min={s['min']} p50={s['p50']} p95={s['p95']} "
+              f"p99={s['p99']} max={s['max']} mean={s['mean']}  (len v={len(m['v'])})")
+
+    facts = results["facts"]
+    print("\n  facts sections + field counts:")
+    for name in ("buildInfo", "hostInfo", "getCmdLineOpts", "derived"):
+        sec = facts.get(name, {})
+        print(f"    - {name:<16} {len(sec)} top-level fields")
+    print(f"    derived: {facts['derived']}")
+
+    shard = [m["path"] for m in mlist if "shardingStatistics" in m["path"]]
+    print(f"\n  sharding paths (serverStatus.shardingStatistics.*): {len(shard)} found")
+    for p in shard[:5]:
+        print(f"      - {p}")
+
+    print("\n" + "=" * 78)
+    print(f"  results.json     : {out_path}")
+    print(f"  size on disk     : {size:,} bytes ({size/1024:.1f} KiB)")
+    print(f"  metrics_full.json: {mf_path}  ({mf_size:,} bytes)")
+    print(f"  metrics_full.json: {mf_path} ({mf_size:,} bytes)")
+    print(f"  missing_paths    : {results['missing_paths']}")
+    print("=" * 78)

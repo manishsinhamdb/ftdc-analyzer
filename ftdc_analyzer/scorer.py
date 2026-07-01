@@ -337,7 +337,5 @@ def score(sig_stats: dict, available_inputs, ruleset: Ruleset,
             "fired": sum(1 for r in scored if r["fired"]),
         },
         "ranked": ranked,
-        # Hook for the LLM narration step (run in the app, not the engine): an LLM reads
-        # `ranked` + `intent` and narrates it, grounded strictly on the numbers.
-        "llm_narration": None,
+        # LLM narration removed - frontend uses template-based generation
     }

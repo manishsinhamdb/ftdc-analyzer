@@ -26,7 +26,7 @@ import {
   PanelLeftOpen,
   Play,
   Server,
-  Settings2,
+  // Settings2 removed
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -61,9 +61,9 @@ import { AssessmentPanel } from "@/components/AssessmentPanel";
 import { AssessmentV2Panel } from "@/components/AssessmentV2Panel";
 import { resizeFromCache } from "@/lib/sizing";
 import { MethodologyRules } from "@/components/MethodologyRules";
-import { type AssessmentMode } from "@/components/AssessmentControls";
+// AssessmentMode removed
 import { relensAssessment, mergeIntents, cachedRulesetDump } from "@/lib/ruleset";
-import { getLlmConfig, setLlmConfig } from "@/lib/llm";
+// LLM functionality removed - using template-based narratives
 import {
   type Baseline,
   type Selections,
@@ -73,7 +73,7 @@ import {
   deleteRunSnapshot,
 } from "@/lib/preflight";
 import { Landing } from "@/components/Landing";
-import { LlmSettings } from "@/components/LlmSettings";
+// LlmSettings component removed
 import { MiniGame } from "@/components/MiniGame";
 import { HealthcheckReport } from "@/components/HealthcheckReport";
 import { StructuralTiles } from "@/components/StructuralTiles";
@@ -295,7 +295,7 @@ export default function App() {
     }
   });
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
-  const [llmOpen, setLlmOpen] = useState(false); // LLM Settings modal
+  // LLM Settings modal removed - no longer needed
   // Theme (dark default / light "report"). main.tsx applies the persisted class before
   // first paint; mirror it into state so the toggle re-renders.
   const [theme, setThemeState] = useState<ThemeName>(() =>
@@ -323,13 +323,7 @@ export default function App() {
   });
   // Assessment mode (grounded ledger vs LLM-reasoned narrative) + targeted category —
   // chosen on the landing screen and the Assessment tab, persisted across runs.
-  const [assessmentMode, setAssessmentMode] = useState<AssessmentMode>(() => {
-    try {
-      return (localStorage.getItem("ftdc.assessmentMode") as AssessmentMode) || "grounded";
-    } catch {
-      return "grounded";
-    }
-  });
+  // assessmentMode removed - always using template-based narratives
   const [targetCategory, setTargetCategory] = useState<string | null>(() => {
     try {
       return localStorage.getItem("ftdc.targetCategory") || null;
@@ -362,7 +356,7 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem("ftdc.generateAssessment", generateAssessment ? "1" : "0");
-      localStorage.setItem("ftdc.assessmentMode", assessmentMode);
+      // assessmentMode removed
       localStorage.setItem("ftdc.intent", intent);
       localStorage.setItem("ftdc.cloud", cloud);
       if (targetCategory) localStorage.setItem("ftdc.targetCategory", targetCategory);
@@ -370,7 +364,7 @@ export default function App() {
     } catch {
       /* persistence best-effort */
     }
-  }, [generateAssessment, assessmentMode, targetCategory, intent, cloud]);
+  }, [generateAssessment, targetCategory, intent, cloud]);
 
   async function loadFrom(dir: string, label: string): Promise<FtdcResults> {
     const d = await readJson<FtdcResults>(dir, "results.json");
@@ -552,7 +546,7 @@ export default function App() {
       saveRunSnapshot(res.dir, res.hostname, {
         ftdc: selectedPath,
         intent,
-        mode: assessmentMode,
+        // mode removed
         model,
         healthcheck: healthcheckPath,
         profiler: profilerPath,
@@ -605,7 +599,7 @@ export default function App() {
     const cur: Selections = {
       ftdc: selectedPath,
       intent,
-      mode: assessmentMode,
+      // mode removed
       model,
       healthcheck: healthcheckPath,
       profiler: profilerPath,
@@ -632,7 +626,7 @@ export default function App() {
     const baseline: Baseline = {
       ftdc: entry.source_path,
       intent: snap?.intent ?? "full_sweep",
-      mode: (snap?.mode as AssessmentMode) ?? "grounded",
+      // mode removed
       model: snap?.model ?? null,
       healthcheck: snap?.healthcheck ?? null,
       profiler: snap?.profiler ?? null,
@@ -644,7 +638,7 @@ export default function App() {
     };
     setSelectedPath(baseline.ftdc);
     setIntent(baseline.intent);
-    setAssessmentMode(baseline.mode);
+    // mode removed
     setHealthcheckPath(baseline.healthcheck);
     setProfilerPath(baseline.profiler);
     setShStatusPath(baseline.sh_status ?? null);
@@ -652,9 +646,7 @@ export default function App() {
     setModel(baseline.model);
     setCloud(baseline.cloud);
     if (baseline.model) {
-      getLlmConfig()
-        .then((c) => setLlmConfig({ ...c, model: baseline.model }))
-        .catch(() => {});
+      // LLM config persistence removed
     }
     return baseline;
   }
@@ -691,6 +683,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, master]);
 
+  // Auto-close the mini-game overlay when data loads to prevent click interception.
+  // The overlay (fixed inset-0 z-50) would otherwise block header controls until
+  // the user manually clicks "Go to results".
+  useEffect(() => {
+    if (data && gameOpen) {
+      setGameOpen(false);
+    }
+  }, [data, gameOpen]);
+
   const effectiveRange = range ?? fullRange;
 
   const ftdcReady = data ? hasFtdc(data) : false;
@@ -716,8 +717,8 @@ export default function App() {
           onIntentChange={setIntent}
           cloud={cloud}
           onCloudChange={setCloud}
-          assessmentMode={assessmentMode}
-          onAssessmentModeChange={setAssessmentMode}
+          // assessmentMode removed
+          // onAssessmentModeChange removed
           model={model}
           onModelChange={setModel}
           onRun={runFromReview}
@@ -725,9 +726,7 @@ export default function App() {
           onSelectRecent={selectRecent}
           onDeleteEntry={deleteHistoryEntry}
           onClearHistory={clearAllHistory}
-          onOpenLlmSettings={() => setLlmOpen(true)}
         />
-        <LlmSettings open={llmOpen} onOpenChange={setLlmOpen} />
         {gameOpen && <MiniGame ready={gameReady} onGoToResults={() => setGameOpen(false)} />}
         <Toaster richColors position="bottom-right" theme={theme} />
       </>
@@ -789,18 +788,7 @@ export default function App() {
           {!collapsed && (
             <div className="px-2 text-[10px] text-muted-foreground">schema v{data.schema_version}</div>
           )}
-          <button
-            onClick={() => setLlmOpen(true)}
-            title="LLM Settings — configure the model provider"
-            aria-label="LLM Settings"
-            className={
-              "flex items-center rounded-md text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/50 hover:text-foreground " +
-              (collapsed ? "justify-center px-2 py-2" : "justify-start gap-2 px-3 py-2")
-            }
-          >
-            <Settings2 className="size-4 shrink-0" />
-            {!collapsed && "LLM Settings"}
-          </button>
+          {/* LLM Settings button removed */}
           <button
             onClick={() => setCollapsed((c) => !c)}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -1104,8 +1092,8 @@ export default function App() {
                 {data.assessment_v2 ? (
                   <AssessmentV2Panel
                     v2={data.assessment_v2}
-                    mode={assessmentMode}
-                    onModeChange={setAssessmentMode}
+                    // mode removed
+                    // onModeChange removed
                     targetCategory={targetCategory}
                     onTargetCategoryChange={setTargetCategory}
                     sizing={data.sizing_recommendation}
@@ -1171,7 +1159,7 @@ export default function App() {
           )}
         </main>
       </div>
-      <LlmSettings open={llmOpen} onOpenChange={setLlmOpen} />
+      {/* LlmSettings removed */}
       {gameOpen && <MiniGame ready={gameReady} onGoToResults={() => setGameOpen(false)} />}
       <Toaster richColors position="bottom-right" theme={theme} />
     </div>

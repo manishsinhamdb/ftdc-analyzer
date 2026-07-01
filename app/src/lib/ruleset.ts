@@ -285,7 +285,7 @@ export interface AssessmentV2 {
     fired: number;
   };
   ranked: CategoryResult[];
-  llm_narration: string | null;
+  // llm_narration removed - using template-based narratives
   overrides_applied?: boolean;
 }
 

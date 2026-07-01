@@ -3,7 +3,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
-mod llm;
 mod ruleset;
 
 #[derive(serde::Serialize)]
@@ -366,10 +365,7 @@ pub fn run() {
             verify_tier_specs,
             resize,
             get_username,
-            llm::llm_list_models,
-            llm::llm_chat,
-            llm::llm_get_config,
-            llm::llm_set_config,
+            // LLM commands removed - using template-based narratives
             ruleset::ruleset_dump,
             ruleset::ruleset_get_overrides,
             ruleset::ruleset_set_overrides,

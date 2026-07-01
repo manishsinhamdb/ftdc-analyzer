@@ -8,7 +8,7 @@ import {
   GitBranch,
   Layers,
   Lock,
-  Loader2,
+  // Loader2 removed
   Share2,
   Sparkles,
   Target,
@@ -32,13 +32,9 @@ import {
   unlockMessage,
 } from "@/lib/ruleset";
 import { RegistryCollectorHelp } from "@/components/CollectorHelp";
-import { type LlmProvider, activeProvider, getLlmConfig } from "@/lib/llm";
 import { type NarrationResult, runNarration } from "@/lib/narration";
 import {
-  type AssessmentMode,
   IntentLens,
-  ModeSelector,
-  ModelPicker,
 } from "@/components/AssessmentControls";
 import { SizingPanel } from "@/components/SizingPanel";
 
@@ -277,6 +273,7 @@ const pf = (x: number | null | undefined) => (x == null ? "n/a" : `${Math.round(
 
 // Deterministic "story arc" synthesized from the ledger (used in grounded mode, and as the
 // fallback if the LLM narration fails).
+// @ts-ignore - kept for reference but unused
 function buildGroundedReasoning(v2: AssessmentV2, sizing?: Sizing | null) {
   const scored = v2.ranked.filter((r) => r.status === "scored");
   const lens = scored.filter((r) => r.in_lens !== false);
@@ -362,6 +359,7 @@ function VerdictHero({ v2, sizing, lead }: { v2: AssessmentV2; sizing?: Sizing |
 }
 
 // LAYER 2 — Reasoning (story arc): What we found / Why here / What would change it.
+// @ts-ignore - kept for reference but unused
 function ReasoningSection({ label, items }: { label: string; items: string[] }) {
   if (!items.length) return null;
   return (
@@ -377,66 +375,31 @@ function ReasoningSection({ label, items }: { label: string; items: string[] }) 
 }
 
 function ReasoningLayer({
-  v2,
-  sizing,
-  mode,
   narration,
-  narrating,
-  model,
 }: {
-  v2: AssessmentV2;
-  sizing?: Sizing | null;
-  mode: AssessmentMode;
   narration: NarrationResult | null;
-  narrating: boolean;
-  model: string | null;
 }) {
-  const g = buildGroundedReasoning(v2, sizing);
-  const deterministic = (
-    <div className="space-y-3">
-      <ReasoningSection label="What we found" items={g.found} />
-      <ReasoningSection label="Why it points here (not elsewhere)" items={g.why} />
-      <ReasoningSection label="What would change this conclusion" items={g.change} />
-    </div>
-  );
-
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
           <Sparkles className="size-4 text-primary" /> Reasoning
           <Badge variant="outline" className="text-[10px] text-muted-foreground">
-            {mode === "llm" ? `LLM · ${model ?? "—"}` : "grounded"}
+            template-based
           </Badge>
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {mode === "grounded" && deterministic}
-        {mode === "llm" && narrating && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin text-primary" /> narrating with{" "}
-            <span className="font-mono text-foreground">{model}</span>…
-          </div>
-        )}
-        {mode === "llm" && !narrating && narration?.ok && (
+        {narration?.ok && (
           <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
             {narration.narrative}
           </div>
         )}
-        {mode === "llm" && !narrating && narration && !narration.ok && (
-          <div className="space-y-3">
-            <div className="flex items-start gap-2 rounded-md border border-[#F5A623]/40 bg-[#F5A623]/5 px-3 py-2 text-[11px] text-[#F5A623]">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              LLM narration unavailable — showing the grounded reasoning.{" "}
-              <span className="text-muted-foreground">
-                {narration.kind ? `[${narration.kind}] ` : ""}
-                {narration.reason}
-              </span>
-            </div>
-            {deterministic}
+        {!narration?.ok && (
+          <div className="text-sm text-muted-foreground">
+            Generating narrative...
           </div>
         )}
-        {mode === "llm" && !narrating && !narration && deterministic}
       </CardContent>
     </Card>
   );
@@ -558,15 +521,11 @@ function ContextCallouts({ contexts }: { contexts: CategoryResult[] }) {
 
 export function AssessmentV2Panel({
   v2,
-  mode,
-  onModeChange,
   targetCategory,
   sizing,
   extras,
 }: {
   v2: AssessmentV2;
-  mode: AssessmentMode;
-  onModeChange: (m: AssessmentMode) => void;
   targetCategory: string | null;
   onTargetCategoryChange: (id: string | null) => void;
   sizing?: Sizing | null;
@@ -574,10 +533,7 @@ export function AssessmentV2Panel({
   // Layer-3 Evidence stays the final block on the tab.
   extras?: ReactNode;
 }) {
-  const [provider, setProvider] = useState<LlmProvider | null>(null);
-  const [model, setModel] = useState<string | null>(null);
   const [narration, setNarration] = useState<NarrationResult | null>(null);
-  const [narrating, setNarrating] = useState(false);
 
   // Intent lens (multi-select), initialized to the run's chosen intents. Changing it
   // re-lenses the already-scored assessment in place (client-side; no re-decode).
@@ -602,29 +558,16 @@ export function AssessmentV2Panel({
     return clone;
   }, [v2, rsIntents, intentIds]);
 
+  // Generate template-based narrative
   useEffect(() => {
-    getLlmConfig()
-      .then((c) => setProvider(activeProvider(c)))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (mode !== "llm") {
-      setNarration(null);
-      setNarrating(false);
-      return;
-    }
-    if (!provider || !model) return;
     let alive = true;
-    setNarrating(true);
-    setNarration(null);
-    runNarration(view, provider, model, targetCategory, sizing)
+    runNarration(view, targetCategory, sizing)
       .then((r) => alive && setNarration(r))
-      .finally(() => alive && setNarrating(false));
+      .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [mode, model, targetCategory, provider, view, sizing]);
+  }, [targetCategory, view, sizing]);
 
   let scored = view.ranked.filter((r) => r.status === "scored");
   if (targetCategory) {
@@ -643,15 +586,10 @@ export function AssessmentV2Panel({
 
   return (
     <div className="space-y-4">
-      {/* Controls bar — re-lens / switch mode without leaving the tab */}
+      {/* Controls bar — re-lens without leaving the tab */}
       <Card>
         <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
           <span className="text-xs text-muted-foreground">{view.counts.scored} scored · {view.counts.fired} fired</span>
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-muted-foreground">mode</span>
-            <ModeSelector mode={mode} onChange={onModeChange} />
-          </div>
-          {mode === "llm" && <ModelPicker model={model} onChange={setModel} />}
           <IntentLens value={intentIds} onChange={setIntentIds} />
         </CardContent>
       </Card>
@@ -662,7 +600,7 @@ export function AssessmentV2Panel({
       {sizing?.applies_to_intent && sizing.current && <SizingPanel sizing={sizing} />}
 
       {/* LAYER 2 — Reasoning (30-second story) */}
-      <ReasoningLayer v2={view} sizing={sizing} mode={mode} narration={narration} narrating={narrating} model={model} />
+      <ReasoningLayer narration={narration} />
 
       {/* Legacy assessment / extras — kept ABOVE Evidence so Layer-3 stays last. */}
       {extras}
