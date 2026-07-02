@@ -1,0 +1,303 @@
+.venv/bin/pyinstaller --onefile --name ftdc-engine \
+	  --collect-all bson --collect-all numpy --collect-all pymongo \
+	  --add-data "/Users/manishsinha/Desktop/Projects/ftdc-analyzer/ftdc_analyzer/tier_tables:ftdc_analyzer/tier_tables" \
+	  --paths . --distpath dist --workpath build/pyi --specpath build \
+	  --noconfirm ftdc_engine_entry.py
+79 INFO: PyInstaller: 6.21.0, contrib hooks: 2026.6
+79 INFO: Python: 3.14.5
+571 INFO: Platform: macOS-26.5.1-arm64-arm-64bit-Mach-O
+571 INFO: Python environment: /Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv
+573 INFO: wrote build/ftdc-engine.spec
+191 WARNING: Failed to collect submodules for 'numpy.f2py.tests' because importing 'numpy.f2py.tests' raised: ModuleNotFoundError: No module named 'pytest'
+1691 INFO: Module search paths (PYTHONPATH):
+['/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python314.zip',
+ '/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14',
+ '/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload',
+ '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages',
+ '/Users/manishsinha/Desktop/Projects/ftdc-analyzer']
+1837 INFO: Appending 'datas' from .spec
+1850 INFO: checking Analysis
+1872 INFO: Building because /Users/manishsinha/Desktop/Projects/ftdc-analyzer/ftdc_analyzer/sizing.py changed
+1872 INFO: Looking for Python shared library...
+1874 INFO: Using Python shared library: /opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/Python
+1874 INFO: Running Analysis Analysis-00.toc
+1874 INFO: Target bytecode optimization level: 0
+1874 INFO: Initializing module dependency graph...
+1875 INFO: Initializing module graph hook caches...
+1884 INFO: Analyzing modules for base_library.zip ...
+2554 INFO: Processing standard module hook 'hook-encodings.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+2757 INFO: Processing standard module hook 'hook-pickle.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+2880 INFO: Processing standard module hook 'hook-math.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+2958 INFO: Processing standard module hook 'hook-difflib.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+2967 INFO: Processing standard module hook 'hook-heapq.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+4294 INFO: Caching module dependency graph...
+4306 INFO: Analyzing /Users/manishsinha/Desktop/Projects/ftdc-analyzer/ftdc_engine_entry.py
+4357 INFO: Processing standard module hook 'hook-numpy.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+4565 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+4565 INFO: SetuptoolsInfo: initializing cached setuptools info...
+4966 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+5019 INFO: Processing standard module hook 'hook-xml.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+5170 INFO: Processing standard module hook 'hook-sysconfig.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+5178 INFO: Processing standard module hook 'hook-_osx_support.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+5180 INFO: Processing standard module hook 'hook-_ctypes.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+5648 INFO: Processing standard module hook 'hook-platform.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+5966 INFO: Processing standard module hook 'hook-webbrowser.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+6828 INFO: Analyzing hidden import 'bson.json_util'
+6846 INFO: Analyzing hidden import 'numpy._configtool'
+6848 INFO: Analyzing hidden import 'numpy._core._exceptions'
+6851 INFO: Analyzing hidden import 'numpy._core._multiarray_tests'
+6851 INFO: Analyzing hidden import 'numpy._core._operand_flag_tests'
+6851 INFO: Analyzing hidden import 'numpy._core._rational_tests'
+6851 INFO: Analyzing hidden import 'numpy._core._simd'
+6852 INFO: Analyzing hidden import 'numpy._core._struct_ufunc_tests'
+6852 INFO: Analyzing hidden import 'numpy._core._umath_tests'
+6855 INFO: Analyzing hidden import 'numpy._core.cversions'
+6855 INFO: Analyzing hidden import 'numpy._pyinstaller'
+6856 INFO: Analyzing hidden import 'numpy._pyinstaller.hook-numpy'
+7012 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7013 INFO: Setuptools: 'importlib_metadata' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.importlib_metadata'!
+7016 INFO: Processing standard module hook 'hook-setuptools.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+7023 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7040 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7040 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+7047 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7047 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+7168 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7296 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+7297 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7301 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7301 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+7531 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7532 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+7830 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7830 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+7862 INFO: Processing standard module hook 'hook-setuptools._vendor.importlib_metadata.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks'
+7874 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/pre_safe_import_module'
+7874 INFO: Setuptools: 'zipp' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.zipp'!
+8068 INFO: Analyzing hidden import 'numpy._typing._extended_precision'
+8069 INFO: Analyzing hidden import 'numpy._utils._pep440'
+8075 INFO: Analyzing hidden import 'numpy.conftest'
+8079 INFO: Analyzing hidden import 'numpy.core._dtype'
+8079 INFO: Analyzing hidden import 'numpy.core._dtype_ctypes'
+8080 INFO: Analyzing hidden import 'numpy.core._internal'
+8080 INFO: Analyzing hidden import 'numpy.core._multiarray_umath'
+8081 INFO: Analyzing hidden import 'numpy.core.arrayprint'
+8082 INFO: Analyzing hidden import 'numpy.core.defchararray'
+8082 INFO: Analyzing hidden import 'numpy.core.einsumfunc'
+8082 INFO: Analyzing hidden import 'numpy.core.fromnumeric'
+8083 INFO: Analyzing hidden import 'numpy.core.function_base'
+8083 INFO: Analyzing hidden import 'numpy.core.getlimits'
+8083 INFO: Analyzing hidden import 'numpy.core.multiarray'
+8084 INFO: Analyzing hidden import 'numpy.core.numeric'
+8084 INFO: Analyzing hidden import 'numpy.core.numerictypes'
+8085 INFO: Analyzing hidden import 'numpy.core.overrides'
+8085 INFO: Analyzing hidden import 'numpy.core.records'
+8085 INFO: Analyzing hidden import 'numpy.core.shape_base'
+8086 INFO: Analyzing hidden import 'numpy.core.umath'
+8086 INFO: Analyzing hidden import 'numpy.f2py.__main__'
+8086 INFO: Analyzing hidden import 'numpy.f2py._src_pyf'
+8090 INFO: Analyzing hidden import 'numpy.fft.tests'
+8091 INFO: Analyzing hidden import 'numpy.fft.tests.test_helper'
+8095 INFO: Analyzing hidden import 'numpy.fft.tests.test_pocketfft'
+8113 INFO: Analyzing hidden import 'numpy.lib._user_array_impl'
+8119 INFO: Analyzing hidden import 'numpy.lib.tests'
+8119 INFO: Analyzing hidden import 'numpy.lib.tests.test__datasource'
+8126 INFO: Analyzing hidden import 'numpy.lib.tests.test__iotools'
+8133 INFO: Analyzing hidden import 'numpy.lib.tests.test__version'
+8135 INFO: Analyzing hidden import 'numpy.lib.tests.test_array_utils'
+8136 INFO: Analyzing hidden import 'numpy.lib.tests.test_arraypad'
+8180 INFO: Analyzing hidden import 'numpy.lib.tests.test_arraysetops'
+8209 INFO: Analyzing hidden import 'numpy.lib.tests.test_arrayterator'
+8211 INFO: Analyzing hidden import 'numpy.lib.tests.test_format'
+8229 INFO: Analyzing hidden import 'numpy.lib.tests.test_function_base'
+8363 INFO: Analyzing hidden import 'numpy.lib.tests.test_histograms'
+8385 INFO: Analyzing hidden import 'numpy.lib.tests.test_index_tricks'
+8403 INFO: Analyzing hidden import 'numpy.lib.tests.test_io'
+8483 INFO: Analyzing hidden import 'numpy.lib.tests.test_loadtxt'
+8510 INFO: Analyzing hidden import 'numpy.lib.tests.test_mixins'
+8516 INFO: Analyzing hidden import 'numpy.lib.tests.test_nanfunctions'
+8555 INFO: Analyzing hidden import 'numpy.lib.tests.test_packbits'
+8568 INFO: Analyzing hidden import 'numpy.lib.tests.test_polynomial'
+8577 INFO: Analyzing hidden import 'numpy.lib.tests.test_recfunctions'
+8602 INFO: Analyzing hidden import 'numpy.lib.tests.test_regression'
+8609 INFO: Analyzing hidden import 'numpy.lib.tests.test_shape_base'
+8632 INFO: Analyzing hidden import 'numpy.lib.tests.test_stride_tricks'
+8647 INFO: Analyzing hidden import 'numpy.lib.tests.test_twodim_base'
+8661 INFO: Analyzing hidden import 'numpy.lib.tests.test_type_check'
+8674 INFO: Analyzing hidden import 'numpy.lib.tests.test_ufunclike'
+8677 INFO: Analyzing hidden import 'numpy.lib.tests.test_utils'
+8679 INFO: Analyzing hidden import 'numpy.lib.user_array'
+8679 INFO: Analyzing hidden import 'numpy.linalg.lapack_lite'
+8682 INFO: Analyzing hidden import 'numpy.linalg.tests'
+8683 INFO: Analyzing hidden import 'numpy.linalg.tests.test_deprecations'
+8683 INFO: Analyzing hidden import 'numpy.linalg.tests.test_linalg'
+8745 INFO: Analyzing hidden import 'numpy.linalg.tests.test_regression'
+8751 INFO: Analyzing hidden import 'numpy.ma.tests'
+8751 INFO: Analyzing hidden import 'numpy.ma.tests.test_arrayobject'
+8752 INFO: Analyzing hidden import 'numpy.ma.tests.test_core'
+8911 INFO: Analyzing hidden import 'numpy.ma.tests.test_deprecations'
+8913 INFO: Analyzing hidden import 'numpy.ma.tests.test_extras'
+8968 INFO: Analyzing hidden import 'numpy.ma.tests.test_mrecords'
+8981 INFO: Analyzing hidden import 'numpy.ma.tests.test_old_ma'
+9011 INFO: Analyzing hidden import 'numpy.ma.tests.test_regression'
+9013 INFO: Analyzing hidden import 'numpy.ma.tests.test_subclassing'
+9024 INFO: Analyzing hidden import 'numpy.matrixlib.tests'
+9024 INFO: Analyzing hidden import 'numpy.matrixlib.tests.test_defmatrix'
+9038 INFO: Analyzing hidden import 'numpy.matrixlib.tests.test_interaction'
+9046 INFO: Analyzing hidden import 'numpy.matrixlib.tests.test_masked_matrix'
+9053 INFO: Analyzing hidden import 'numpy.matrixlib.tests.test_matrix_linalg'
+9055 INFO: Analyzing hidden import 'numpy.matrixlib.tests.test_multiarray'
+9056 INFO: Analyzing hidden import 'numpy.matrixlib.tests.test_numeric'
+9057 INFO: Analyzing hidden import 'numpy.matrixlib.tests.test_regression'
+9058 INFO: Analyzing hidden import 'numpy.polynomial.tests'
+9058 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_chebyshev'
+9075 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_classes'
+9090 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_hermite'
+9106 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_hermite_e'
+9121 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_laguerre'
+9136 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_legendre'
+9151 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_polynomial'
+9170 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_polyutils'
+9173 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_printing'
+9183 INFO: Analyzing hidden import 'numpy.polynomial.tests.test_symbol'
+9188 INFO: Analyzing hidden import 'numpy.random.tests'
+9188 INFO: Analyzing hidden import 'numpy.random.tests.data'
+9188 INFO: Analyzing hidden import 'numpy.random.tests.test_direct'
+9202 INFO: Analyzing hidden import 'numpy.random.tests.test_extending'
+9215 INFO: Analyzing hidden import 'numpy.random.tests.test_generator_mt19937'
+9289 INFO: Analyzing hidden import 'numpy.random.tests.test_generator_mt19937_regressions'
+9294 INFO: Analyzing hidden import 'numpy.random.tests.test_random'
+9336 INFO: Analyzing hidden import 'numpy.random.tests.test_randomstate'
+9387 INFO: Analyzing hidden import 'numpy.random.tests.test_randomstate_regression'
+9393 INFO: Analyzing hidden import 'numpy.random.tests.test_regression'
+9397 INFO: Analyzing hidden import 'numpy.random.tests.test_seed_sequence'
+9399 INFO: Analyzing hidden import 'numpy.random.tests.test_smoke'
+9421 INFO: Analyzing hidden import 'numpy.testing.print_coercion_tables'
+9425 INFO: Analyzing hidden import 'numpy.testing.tests'
+9426 INFO: Analyzing hidden import 'numpy.testing.tests.test_utils'
+9474 INFO: Analyzing hidden import 'numpy.tests'
+9474 INFO: Analyzing hidden import 'numpy.tests.test__all__'
+9475 INFO: Analyzing hidden import 'numpy.tests.test_configtool'
+9477 INFO: Analyzing hidden import 'numpy.tests.test_ctypeslib'
+9486 INFO: Analyzing hidden import 'numpy.tests.test_lazyloading'
+9486 INFO: Analyzing hidden import 'numpy.tests.test_matlib'
+9488 INFO: Analyzing hidden import 'numpy.tests.test_numpy_config'
+9537 INFO: Analyzing hidden import 'numpy.tests.test_numpy_version'
+9538 INFO: Analyzing hidden import 'numpy.tests.test_public_api'
+9548 INFO: Analyzing hidden import 'numpy.tests.test_reloading'
+9550 INFO: Analyzing hidden import 'numpy.tests.test_scripts'
+9551 INFO: Analyzing hidden import 'numpy.tests.test_warnings'
+9553 INFO: Analyzing hidden import 'numpy.typing.mypy_plugin'
+9557 INFO: Analyzing hidden import 'numpy.typing.tests'
+9557 INFO: Analyzing hidden import 'numpy.typing.tests.test_isfile'
+9558 INFO: Analyzing hidden import 'numpy.typing.tests.test_runtime'
+9561 INFO: Analyzing hidden import 'numpy.typing.tests.test_typing'
+9565 INFO: Analyzing hidden import 'pymongo'
+9960 INFO: Processing standard module hook 'hook-dns.rdata.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/_pyinstaller_hooks_contrib/stdhooks'
+10991 INFO: Analyzing hidden import 'pymongo.auth'
+10991 INFO: Analyzing hidden import 'pymongo.auth_oidc'
+10992 INFO: Analyzing hidden import 'pymongo.encryption'
+10992 INFO: Analyzing hidden import 'pymongo.event_loggers'
+10996 INFO: Analyzing hidden import 'pymongo.mongo_client'
+10997 INFO: Analyzing hidden import 'pymongo.pool'
+10997 INFO: Processing module hooks (post-graph stage)...
+11163 INFO: Performing binary vs. data reclassification (1062 entries)
+11255 INFO: Looking for ctypes DLLs
+11309 INFO: Analyzing run-time hooks ...
+11311 INFO: Including run-time hook 'pyi_rth_inspect.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/rthooks'
+11313 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/rthooks'
+11314 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/rthooks'
+11315 INFO: Including run-time hook 'pyi_rth_setuptools.py' from '/Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/hooks/rthooks'
+11329 INFO: Creating base_library.zip...
+11338 INFO: Looking for dynamic libraries
+11448 INFO: Warnings written to /Users/manishsinha/Desktop/Projects/ftdc-analyzer/build/pyi/ftdc-engine/warn-ftdc-engine.txt
+11472 INFO: Graph cross-reference written to /Users/manishsinha/Desktop/Projects/ftdc-analyzer/build/pyi/ftdc-engine/xref-ftdc-engine.html
+11529 INFO: checking PYZ
+11534 INFO: Building because toc changed
+11534 INFO: Building PYZ (ZlibArchive) /Users/manishsinha/Desktop/Projects/ftdc-analyzer/build/pyi/ftdc-engine/PYZ-00.pyz
+12059 INFO: Building PYZ (ZlibArchive) /Users/manishsinha/Desktop/Projects/ftdc-analyzer/build/pyi/ftdc-engine/PYZ-00.pyz completed successfully.
+12067 INFO: EXE target arch: arm64
+12067 INFO: Code signing identity: None
+12073 INFO: checking PKG
+12078 INFO: Building because toc changed
+12078 INFO: Building PKG (CArchive) ftdc-engine.pkg
+14918 INFO: Building PKG (CArchive) ftdc-engine.pkg completed successfully.
+14927 INFO: Bootloader /Users/manishsinha/Desktop/Projects/ftdc-analyzer/.venv/lib/python3.14/site-packages/PyInstaller/bootloader/Darwin-64bit/run
+14927 INFO: checking EXE
+14933 INFO: Building because toc changed
+14933 INFO: Building EXE from EXE-00.toc
+14933 INFO: Copying bootloader EXE to /Users/manishsinha/Desktop/Projects/ftdc-analyzer/dist/ftdc-engine
+14934 INFO: Converting EXE to target arch (arm64)
+15399 INFO: Removing signature(s) from EXE
+15413 INFO: Modifying Mach-O image UUID(s) in EXE
+15423 INFO: Appending PKG archive to EXE
+15429 INFO: Fixing EXE headers for code signing
+15432 INFO: Re-signing the EXE
+15464 INFO: Building EXE from EXE-00.toc completed successfully.
+15473 INFO: Build complete! The results are available in: /Users/manishsinha/Desktop/Projects/ftdc-analyzer/dist
+mkdir -p app/src-tauri/binaries
+cp dist/ftdc-engine "app/src-tauri/binaries/ftdc-engine-aarch64-apple-darwin"
+chmod +x "app/src-tauri/binaries/ftdc-engine-aarch64-apple-darwin"
+sidecar staged: app/src-tauri/binaries/ftdc-engine-aarch64-apple-darwin
+cd app && npm run tauri build
+
+> app@0.1.0 tauri
+> tauri build
+
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm run build`
+
+> app@0.1.0 build
+> tsc && vite build
+
+vite v7.3.5 building client environment for production...
+transforming...
+✓ 2497 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.47 kB │ gzip:   0.31 kB
+dist/assets/index-DfnguPK7.css   84.72 kB │ gzip:  13.79 kB
+dist/assets/index-CuOZQdIj.js   956.97 kB │ gzip: 282.27 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 1.93s
+   Compiling objc2-exception-helper v0.1.1
+   Compiling ring v0.17.14
+   Compiling app v0.1.0 (/Users/manishsinha/Desktop/Projects/ftdc-analyzer/app/src-tauri)
+   Compiling objc2 v0.6.4
+   Compiling objc2-core-foundation v0.3.2
+   Compiling block2 v0.6.2
+   Compiling rustls v0.23.40
+   Compiling dispatch2 v0.3.1
+   Compiling objc2-foundation v0.3.2
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling objc2-app-kit v0.3.2
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling objc2-web-kit v0.3.2
+   Compiling tao v0.35.3
+   Compiling window-vibrancy v0.6.0
+   Compiling muda v0.19.3
+   Compiling rfd v0.16.0
+   Compiling tauri-runtime v2.11.3
+   Compiling wry v0.55.1
+   Compiling tauri-runtime-wry v2.11.3
+   Compiling tauri v2.11.3
+   Compiling tauri-plugin-fs v2.5.1
+   Compiling tauri-plugin-opener v2.5.4
+   Compiling tauri-plugin-shell v2.3.5
+   Compiling tauri-plugin-dialog v2.7.1
+    Finished `release` profile [optimized] target(s) in 29.61s
+       Built application at: /Users/manishsinha/Desktop/Projects/ftdc-analyzer/app/src-tauri/target/release/app
+    Bundling FTDC Analyzer.app (/Users/manishsinha/Desktop/Projects/ftdc-analyzer/app/src-tauri/target/release/bundle/macos/FTDC Analyzer.app)
+    Bundling FTDC Analyzer_0.1.0_aarch64.dmg (/Users/manishsinha/Desktop/Projects/ftdc-analyzer/app/src-tauri/target/release/bundle/dmg/FTDC Analyzer_0.1.0_aarch64.dmg)
+     Running bundle_dmg.sh
+    Finished 2 bundles at:
+        /Users/manishsinha/Desktop/Projects/ftdc-analyzer/app/src-tauri/target/release/bundle/macos/FTDC Analyzer.app
+        /Users/manishsinha/Desktop/Projects/ftdc-analyzer/app/src-tauri/target/release/bundle/dmg/FTDC Analyzer_0.1.0_aarch64.dmg
+
+bundles in app/src-tauri/target/release/bundle/ (.app + .dmg)

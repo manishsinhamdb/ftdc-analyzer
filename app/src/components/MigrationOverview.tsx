@@ -43,13 +43,15 @@ export function MigrationOverview({ data }: MigrationOverviewProps) {
   const members = "—"; // Not directly available in current schema
   const isSharded = false; // Would need to check healthcheck structure
 
-  // Atlas recommendation
+  // Atlas recommendation - the tier name is in sizing.recommended (e.g., "M40")
   const recommendedTier = sizing?.recommended || "—";
-  const recommendedOption = sizing?.options?.find(opt => opt.tier?.name === sizing?.recommended);
+  // Find the option that matches the recommended tier
+  const recommendedOption = sizing?.options?.find(opt =>
+    opt.available && opt.tier?.name === sizing?.recommended
+  );
 
-  // Fired categories for evidence
+  // Fired categories for evidence - show ALL, not just top 3
   const firedCategories = ranked.filter((c: any) => c.fired);
-  const topIssues = firedCategories.slice(0, 3);
 
   return (
     <div className="space-y-8 p-6">
@@ -177,42 +179,71 @@ export function MigrationOverview({ data }: MigrationOverviewProps) {
         </div>
       </section>
 
-      {/* Analysis & Evidence */}
+      {/* Analysis & Evidence - Show ALL fired categories with FULL details */}
       <section className="space-y-4">
-        <h2 className="text-xl font-semibold">Analysis & Evidence</h2>
+        <h2 className="text-xl font-semibold">Detailed Analysis & Evidence</h2>
 
-        {topIssues.length > 0 ? (
-          <div className="space-y-3">
-            {topIssues.map((category: any) => (
-              <Card key={category.id}>
+        {firedCategories.length > 0 ? (
+          <div className="space-y-4">
+            {firedCategories.map((category: any) => (
+              <Card key={category.id} className="border-2">
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between">
-                    <div className="space-y-1">
-                      <CardTitle className="text-base">{category.name}</CardTitle>
+                    <div className="space-y-1 flex-1">
+                      <div className="flex items-center gap-2">
+                        <CardTitle className="text-lg">{category.name}</CardTitle>
+                        {category.confidence && (
+                          <Badge variant="outline" className="font-mono text-xs">
+                            {(category.confidence * 100).toFixed(0)}% confidence
+                          </Badge>
+                        )}
+                      </div>
                       <CardDescription className="text-sm">
                         {category.title || category.tagline}
                       </CardDescription>
                     </div>
-                    <Badge variant={category.fired ? "destructive" : "secondary"}>
-                      {category.fired ? "Issue Detected" : "OK"}
+                    <Badge variant="destructive" className="shrink-0">
+                      Issue Detected
                     </Badge>
                   </div>
                 </CardHeader>
-                <CardContent className="space-y-2">
-                  {category.ledger?.filter((s: any) => s.passed).slice(0, 3).map((signal: any, idx: number) => (
-                    <div key={idx} className="flex items-start gap-2 text-sm">
-                      <AlertCircle className="size-4 mt-0.5 shrink-0 text-destructive" />
-                      <div>
-                        <span className="font-medium">{signal.signal}:</span>{" "}
-                        <span className="text-muted-foreground">
-                          {signal.summary || `Threshold exceeded (weight: ${signal.weight})`}
-                        </span>
+                <CardContent className="space-y-3">
+                  {/* Show ALL signals, not just top 3 */}
+                  <div className="space-y-2">
+                    <h4 className="text-sm font-semibold">Signals Fired:</h4>
+                    {category.ledger?.filter((s: any) => s.passed).map((signal: any, idx: number) => (
+                      <div key={idx} className="flex items-start gap-2 rounded-md bg-muted/50 p-3">
+                        <AlertCircle className="size-4 mt-0.5 shrink-0 text-destructive" />
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium text-sm">{signal.signal}</span>
+                            <span className="text-xs text-muted-foreground">weight: {signal.weight}</span>
+                          </div>
+                          {signal.summary && (
+                            <p className="text-sm text-muted-foreground">{signal.summary}</p>
+                          )}
+                          {signal.value !== undefined && (
+                            <p className="text-xs font-mono text-muted-foreground">
+                              Value: {typeof signal.value === 'number' ? signal.value.toFixed(2) : signal.value}
+                            </p>
+                          )}
+                        </div>
                       </div>
+                    ))}
+                  </div>
+
+                  {/* Show recommendations if available */}
+                  {category.recommendation && (
+                    <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
+                      <h4 className="text-sm font-semibold mb-2">Recommendation:</h4>
+                      <p className="text-sm text-muted-foreground">{category.recommendation}</p>
                     </div>
-                  ))}
-                  {category.confidence && (
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      Confidence: {(category.confidence * 100).toFixed(0)}%
+                  )}
+
+                  {/* Show cross-references */}
+                  {category.cross_references && category.cross_references.length > 0 && (
+                    <div className="text-xs text-muted-foreground">
+                      Related: {category.cross_references.join(', ')}
                     </div>
                   )}
                 </CardContent>
