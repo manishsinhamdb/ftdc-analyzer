@@ -9,42 +9,28 @@ import {
   Activity,
   ChevronDown,
   Compass,
-  Cpu,
   Database,
   FileText,
   FolderOpen,
   Gauge,
-  HardDrive,
-  ClipboardList,
   History,
   Home,
   Loader2,
   Lock,
-  MemoryStick,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
-  Server,
-  // Settings2 removed
-  SlidersHorizontal,
-  Sparkles,
   Sun,
   X,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+// revealItemInDir removed - not needed in web-focused migration view
 import { toast, Toaster } from "sonner";
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+// Card components removed - using MigrationOverview instead
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -55,12 +41,8 @@ import { TimeSeriesChart, ChartPlaceholder } from "@/components/TimeSeriesChart"
 import { SignalsTable, type Thresholds } from "@/components/SignalsTable";
 import { RangeSelector } from "@/components/RangeSelector";
 // InsightsStrip removed - using MigrationOverview instead
-import { SystemView } from "@/components/SystemView";
 import { ExploreView } from "@/components/ExploreView";
-import { AssessmentPanel } from "@/components/AssessmentPanel";
-import { AssessmentV2Panel } from "@/components/AssessmentV2Panel";
 import { resizeFromCache } from "@/lib/sizing";
-import { MethodologyRules } from "@/components/MethodologyRules";
 // AssessmentMode removed
 import { relensAssessment, mergeIntents, cachedRulesetDump } from "@/lib/ruleset";
 // LLM functionality removed - using template-based narratives
@@ -75,8 +57,6 @@ import {
 import { Landing } from "@/components/Landing";
 // LlmSettings component removed
 import { MiniGame } from "@/components/MiniGame";
-import { HealthcheckReport } from "@/components/HealthcheckReport";
-import { StructuralTiles } from "@/components/StructuralTiles";
 import { MigrationOverview } from "@/components/MigrationOverview";
 import { applyTheme, nextTheme, type ThemeName } from "@/lib/theme";
 import {
@@ -93,12 +73,8 @@ import {
   type FtdcResults,
   type MetricsFull,
   type RunHistoryEntry,
-  type Verdict,
   MASTER_SERIES,
-  STATUS_COLORS,
-  VERDICT_COLORS,
   DEFAULT_GRANULARITY,
-  fmtNum,
   fmtSpan,
   historyEntryLabels,
 } from "@/lib/ftdc";
@@ -125,14 +101,7 @@ function initialView(d: FtdcResults): View {
   return hasFtdc(d) ? "overview" : "healthcheck";
 }
 
-const VERDICT_META: Record<
-  string,
-  { title: string; icon: ComponentType<{ className?: string }> }
-> = {
-  ram: { title: "RAM / Cache", icon: MemoryStick },
-  cpu: { title: "CPU", icon: Cpu },
-  disk: { title: "Disk", icon: HardDrive },
-};
+// VERDICT_META removed - using MigrationOverview instead
 
 const NAV: {
   label: string;
@@ -309,7 +278,7 @@ export default function App() {
   // Assessment mode (grounded ledger vs LLM-reasoned narrative) + targeted category —
   // chosen on the landing screen and the Assessment tab, persisted across runs.
   // assessmentMode removed - always using template-based narratives
-  const [targetCategory, setTargetCategory] = useState<string | null>(() => {
+  const [targetCategory] = useState<string | null>(() => {
     try {
       return localStorage.getItem("ftdc.targetCategory") || null;
     } catch {
@@ -424,8 +393,7 @@ export default function App() {
       });
       if (!dest) return; // user cancelled
       await invoke("save_report", { src: `${dataDir}/report.html`, dest });
-      toast.success("Report saved");
-      revealItemInDir(dest).catch(() => {});
+      toast.success(`Report saved to ${dest}`);
     } catch (e) {
       toast.error(`Export failed: ${String(e)}`);
     }
@@ -996,9 +964,6 @@ export default function App() {
 
               {data.chart_catalog.map((cat) => (
                 <TabsContent key={cat.category} value={cat.category} className="mt-4">
-                  {cat.category === STRUCTURAL_CATEGORY && hcReady && data.healthcheck ? (
-                    <StructuralTiles hc={data.healthcheck} sizing={data.sizing_recommendation} />
-                  ) : (
                   <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                     {cat.charts.map((ch) => {
                       const cls = spansTwoCols(ch) ? "xl:col-span-2" : undefined;
@@ -1016,67 +981,12 @@ export default function App() {
                       );
                     })}
                   </div>
-                  )}
                 </TabsContent>
               ))}
             </Tabs>
           )}
 
-          {data && view === "healthcheck" && data.healthcheck && (
-            <HealthcheckReport hc={data.healthcheck} sizing={data.sizing_recommendation} />
-          )}
-
-          {data && view === "methodology" && <MethodologyRules />}
-
-          {data && view === "inference" && (
-            generateAssessment && (data.assessment_v2 || data.assessment) ? (
-              <div className="space-y-4">
-                {data.assessment_v2 ? (
-                  <AssessmentV2Panel
-                    v2={data.assessment_v2}
-                    // mode removed
-                    // onModeChange removed
-                    targetCategory={targetCategory}
-                    onTargetCategoryChange={setTargetCategory}
-                    sizing={data.sizing_recommendation}
-                    // Legacy signature assessment rendered BETWEEN Reasoning and Evidence so
-                    // the 3-layer Evidence stays the final block on the tab.
-                    extras={
-                      data.assessment && data.cost_optimization ? (
-                        <AssessmentPanel
-                          assessment={data.assessment}
-                          costOptimization={data.cost_optimization}
-                        />
-                      ) : null
-                    }
-                  />
-                ) : (
-                  data.assessment && data.cost_optimization && (
-                    <AssessmentPanel
-                      assessment={data.assessment}
-                      costOptimization={data.cost_optimization}
-                    />
-                  )
-                )}
-              </div>
-            ) : (
-              <Card>
-                <CardContent className="flex flex-col items-center justify-center gap-4 py-16 text-center">
-                  <Sparkles className="size-8 text-muted-foreground/60" />
-                  <div className="max-w-md space-y-1">
-                    <div className="text-base font-semibold">Automated Assessment is off</div>
-                    <p className="text-sm text-muted-foreground">
-                      A deterministic first pass turns combinatorial signals into named findings
-                      and recommendations. It's opt-in so the default view stays unbiased.
-                    </p>
-                  </div>
-                  <Button className="gap-2" onClick={() => setGenerateAssessment(true)}>
-                    <Sparkles className="size-4" /> Generate assessment
-                  </Button>
-                </CardContent>
-              </Card>
-            )
-          )}
+          {/* Removed views: methodology, inference, system, healthcheck */}
 
           {data && view === "signals" && (
             <SignalsTable
@@ -1086,8 +996,6 @@ export default function App() {
               thresholds={data.verdicts ? buildThresholds(data.verdicts) : {}}
             />
           )}
-
-          {data && view === "system" && data.facts && <SystemView facts={data.facts} />}
 
           {data && view === "explore" && (
             <ExploreView
