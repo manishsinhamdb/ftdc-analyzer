@@ -54,7 +54,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TimeSeriesChart, ChartPlaceholder } from "@/components/TimeSeriesChart";
 import { SignalsTable, type Thresholds } from "@/components/SignalsTable";
 import { RangeSelector } from "@/components/RangeSelector";
-import { InsightsStrip } from "@/components/InsightsStrip";
+// InsightsStrip removed - using MigrationOverview instead
 import { SystemView } from "@/components/SystemView";
 import { ExploreView } from "@/components/ExploreView";
 import { AssessmentPanel } from "@/components/AssessmentPanel";
@@ -77,6 +77,7 @@ import { Landing } from "@/components/Landing";
 import { MiniGame } from "@/components/MiniGame";
 import { HealthcheckReport } from "@/components/HealthcheckReport";
 import { StructuralTiles } from "@/components/StructuralTiles";
+import { MigrationOverview } from "@/components/MigrationOverview";
 import { applyTheme, nextTheme, type ThemeName } from "@/lib/theme";
 import {
   DropdownMenu,
@@ -140,33 +141,21 @@ const NAV: {
   tip: string;
   needs?: "ftdc" | "healthcheck";
 }[] = [
-  { label: "Overview", view: "overview", icon: Gauge, tip: "Unbiased results: verdicts, insight chips, headline charts", needs: "ftdc" },
-  { label: "Healthcheck", view: "healthcheck", icon: ClipboardList, tip: "getMongoData report: server, collections, indexes, ops, security", needs: "healthcheck" },
+  { label: "Migration Overview", view: "overview", icon: Gauge, tip: "Current system → Recommended Atlas tier configuration", needs: "ftdc" },
   { label: "Charts", view: "charts", icon: Activity, tip: "All metric charts grouped by category", needs: "ftdc" },
   { label: "Signals", view: "signals", icon: Database, tip: "Searchable table of every derived signal", needs: "ftdc" },
   { label: "System", view: "system", icon: Server, tip: "Full host build, OS, and mongod config", needs: "ftdc" },
+  { label: "Healthcheck", view: "healthcheck", icon: ClipboardList, tip: "getMongoData report: server, collections, indexes, ops, security", needs: "healthcheck" },
   { label: "Explore", view: "explore", icon: Compass, tip: "Browse and chart any of the 1300+ raw metrics", needs: "ftdc" },
   { label: "Methodology", view: "methodology", icon: SlidersHorizontal, tip: "View & tune the scoring ruleset: categories, signals, conditioning" },
-  { label: "Assessment", view: "inference", icon: Sparkles, tip: "Opt-in automated first-pass findings and recommendations" },
+  { label: "Assessment", view: "inference", icon: Sparkles, tip: "Detailed capacity analysis with evidence and recommendations" },
 ];
 
-const OVERVIEW_CHART_TITLES = [
-  "CPU utilization",
-  "WiredTiger cache fill",
-  "Disk utilization",
-];
+// OVERVIEW_CHART_TITLES, findChart removed - using MigrationOverview instead
 
 // The chart catalog category whose placeholder tiles are replaced by healthcheck-derived
 // snapshot tiles (StructuralTiles) once a healthcheck is loaded.
 const STRUCTURAL_CATEGORY = "Indexes & Storage";
-
-function findChart(catalog: FtdcResults["chart_catalog"], title: string): ChartSpec | undefined {
-  for (const cat of catalog) {
-    const c = cat.charts.find((ch) => ch.title === title);
-    if (c) return c;
-  }
-  return undefined;
-}
 
 function spansTwoCols(ch: ChartSpec): boolean {
   const t = ch.title.toLowerCase();
@@ -193,9 +182,9 @@ function buildThresholds(verdicts: NonNullable<FtdcResults["verdicts"]>): Thresh
 }
 
 // Overview verdict card — glanceable only. Full per-check evidence lives on the
-// Assessment tab (capacity ledgers) + Signals; here we show the verdict, confidence,
-// headline, recommended vCPUs, and a compact check summary (the worst breach).
-function VerdictCard({ id, v }: { id: string; v: Verdict }) {
+// VerdictCard removed - using MigrationOverview instead
+// Old verdict cards are replaced by the new migration-focused layout
+/* function VerdictCard({ id, v }: { id: string; v: Verdict }) {
   const meta = VERDICT_META[id];
   const Icon = meta.icon;
   const color = VERDICT_COLORS[v.verdict] ?? "#8AA0B6";
@@ -254,7 +243,7 @@ function VerdictCard({ id, v }: { id: string; v: Verdict }) {
       </CardContent>
     </Card>
   );
-}
+} */
 
 function HwPill({ children }: { children: ReactNode }) {
   return (
@@ -960,48 +949,9 @@ export default function App() {
         </header>
 
         {/* Content */}
-        <main className="flex-1 space-y-5 overflow-auto p-6">
+        <main className="flex-1 overflow-auto">
           {data && view === "overview" && (
-            <>
-              <div className="sticky top-0 z-30 -mx-6 -mt-6 mb-4 border-b border-border bg-background px-6 pb-3 pt-6">
-                <RangeSelector
-                  capture={data.capture}
-                  value={effectiveRange}
-                  onChange={setRange}
-                  granularity={granularity}
-                  onGranularityChange={setGranularity}
-                />
-              </div>
-
-              {/* Overview is intentionally unbiased: verdicts, insight chips, and
-                  headline charts only. The Automated Assessment lives on its own tab,
-                  opt-in via the "Generate assessment" toggle. */}
-              <InsightsStrip insights={data.insights} />
-
-              {data.verdicts && (
-                <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                  <VerdictCard id="ram" v={data.verdicts.ram} />
-                  <VerdictCard id="cpu" v={data.verdicts.cpu} />
-                  <VerdictCard id="disk" v={data.verdicts.disk} />
-                </section>
-              )}
-
-              <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                {OVERVIEW_CHART_TITLES.map((title) => {
-                  const spec = findChart(data.chart_catalog, title);
-                  return spec ? (
-                    <TimeSeriesChart
-                      key={title}
-                      spec={spec}
-                      series={data.series}
-                      range={effectiveRange}
-                      granularity={granularity}
-                      className={spansTwoCols(spec) ? "xl:col-span-2" : undefined}
-                    />
-                  ) : null;
-                })}
-              </section>
-            </>
+            <MigrationOverview data={data} />
           )}
 
           {data && view === "charts" && (
