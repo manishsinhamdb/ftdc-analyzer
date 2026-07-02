@@ -37,18 +37,14 @@ interface Props {
   onPickInput: (id: string, label: string) => void;
   onClearInput: (id: string) => void;
   intent: string | null;
-  onIntentChange: (id: string) => void;
   cloud: string;
   onCloudChange: (c: string) => void;
-  // assessment mode removed - always using template-based narratives
   model: string | null;
-  onModelChange: (m: string) => void;
   onRun: (baseline: Baseline | null) => void;
   history: RunHistoryEntry[];
   onSelectRecent: (entry: RunHistoryEntry) => Baseline;
   onDeleteEntry: (cacheDir: string) => void;
   onClearHistory: () => void;
-  onOpenLlmSettings?: () => void;
 }
 
 type Phase = "entry" | "recent" | "wizard";

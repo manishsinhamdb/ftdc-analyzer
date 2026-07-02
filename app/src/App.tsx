@@ -714,13 +714,9 @@ export default function App() {
           onPickInput={onPickInput}
           onClearInput={onClearInput}
           intent={intent}
-          onIntentChange={setIntent}
           cloud={cloud}
           onCloudChange={setCloud}
-          // assessmentMode removed
-          // onAssessmentModeChange removed
           model={model}
-          onModelChange={setModel}
           onRun={runFromReview}
           history={history}
           onSelectRecent={selectRecent}
