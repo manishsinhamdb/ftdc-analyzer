@@ -24,6 +24,7 @@
       "Bash(sudo *)",
       "Bash(rm -rf /*)",
       "Bash(chmod 777 *)"
-    ]
+    ],
+    "comment": "Git operations are fully allowed via Bash autoAllow - no additional configuration needed"
   }
 }

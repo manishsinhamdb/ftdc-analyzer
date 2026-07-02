@@ -1,4 +1,4 @@
-"""Layer-2 deterministic two-pass scorer.
+"""Layer-2 deterministic two-pass scorer with enhanced cross-dependency analysis.
 
 Pass 1 — for each enabled category whose required inputs are available, compute a
 confidence from its weighted signals (applying disambiguators) and build an evidence
@@ -9,8 +9,13 @@ in the conditional recommendation if the conditioning category *fired*; and wher
 conditioning category's input is ABSENT, attach an honest caveat instead of silently
 finalizing.
 
-Output is a JSON-serializable `assessment_v2` block. The deterministic scorer is always
-computed; an LLM step can later narrate it (a clean hook is left, not wired here).
+Pass 3 (NEW) — Enhanced analysis:
+- Build dependency graph for root cause analysis
+- Calculate multi-factor confidence scores (0.0-0.99)
+- Classify issues (capacity vs workload vs config)
+- Generate dimension-specific recommendations
+
+Output is a JSON-serializable `assessment_v2` block with enhanced analytics.
 """
 
 from __future__ import annotations
@@ -18,6 +23,15 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from .ruleset.schema import Category, Intent, IntentCategory, Ruleset, compare
+
+# Import new analysis modules
+try:
+    from .dependency_graph import build_mongodb_dependency_graph, explain_root_causes
+    from .confidence_calculator import ConfidenceCalculator
+    from .issue_classifier import IssueClassifier
+    ENHANCED_ANALYSIS_AVAILABLE = True
+except ImportError:
+    ENHANCED_ANALYSIS_AVAILABLE = False
 
 # Categories whose required inputs aren't all satisfied sort after scored ones;
 # input_provided (file supplied, parser pending) above requires_input; stubs/disabled last.
@@ -316,7 +330,13 @@ def score(sig_stats: dict, available_inputs, ruleset: Ruleset,
             ranked = [target] + rest
 
     scored = [r for r in ranked if r["status"] == "scored"]
-    return {
+
+    # Pass 3: Enhanced analysis (dependency graph + confidence + issue classification)
+    enhanced_analysis = None
+    if ENHANCED_ANALYSIS_AVAILABLE:
+        enhanced_analysis = _pass3_enhanced_analysis(sig_stats, ranked, available, provided)
+
+    assessment = {
         "version": 2,
         "mode": mode,
         "target_category": focus_id,
@@ -338,4 +358,69 @@ def score(sig_stats: dict, available_inputs, ruleset: Ruleset,
         },
         "ranked": ranked,
         # LLM narration removed - frontend uses template-based generation
+    }
+
+    # Add enhanced analysis if available
+    if enhanced_analysis:
+        assessment["enhanced_analysis"] = enhanced_analysis
+
+    return assessment
+
+
+def _pass3_enhanced_analysis(sig_stats: dict, ranked: list, available: set, provided: set) -> dict:
+    """
+    Pass 3: Enhanced cross-dependency analysis with confidence scoring.
+
+    Returns dict with:
+    - dependency_graph: Graph structure for visualization
+    - root_cause_analysis: For each fired category, trace to root causes
+    - confidence_scores: Multi-factor confidence for each fired category
+    - issue_classification: Overall issue type and dimension-specific recommendations
+    """
+    if not ENHANCED_ANALYSIS_AVAILABLE:
+        return None
+
+    # Build dependency graph
+    dep_graph = build_mongodb_dependency_graph(sig_stats, ranked)
+
+    # Root cause analysis for fired categories
+    fired = [c for c in ranked if c.get("fired") and c.get("status") == "scored"]
+    root_cause_analysis = {}
+    for cat in fired:
+        analysis = explain_root_causes(dep_graph, cat["id"])
+        root_cause_analysis[cat["id"]] = analysis
+
+    # Calculate enhanced confidence scores
+    calculator = ConfidenceCalculator()
+    confidence_scores = {}
+    for cat in fired:
+        score = calculator.calculate(
+            category=cat,
+            sig_stats=sig_stats,
+            ranked=ranked,
+            data_sources=available | provided,
+            dependency_graph=dep_graph
+        )
+        confidence_scores[cat["id"]] = score.to_dict()
+
+    # Classify issue and generate recommendations
+    classifier = IssueClassifier()
+    issue_classification = classifier.classify(
+        sig_stats=sig_stats,
+        ranked=ranked,
+        healthcheck=None,  # Will be enhanced when healthcheck integration is added
+        dependency_graph=dep_graph
+    )
+
+    return {
+        "dependency_graph": dep_graph.to_dict(),
+        "root_cause_analysis": root_cause_analysis,
+        "confidence_scores": confidence_scores,
+        "issue_classification": issue_classification.to_dict(),
+        "summary": {
+            "issue_type": issue_classification.issue_type.value,
+            "primary_dimension": issue_classification.primary_dimension.value,
+            "overall_confidence": round(issue_classification.confidence, 3),
+            "recommendation_count": len(issue_classification.recommendations),
+        }
     }

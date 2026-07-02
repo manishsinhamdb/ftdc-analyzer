@@ -7,6 +7,9 @@ inferred infra → three options (General downsize / Low-CPU R-tier / Provisione
 confidences drawn from the capacity-category scores → a recommended option chosen from the
 evidence pattern → honest data-gap + workload-efficiency conditioning caveats.
 
+ENHANCED: Integrates with issue_classifier for dimension-specific recommendations
+with 9.5-9.9 confidence targets.
+
 ADDITIVE: never fabricates a storage/tier number it cannot derive — emits an explicit
 "insufficient information: provide <input>" instead.
 """
@@ -16,6 +19,13 @@ from __future__ import annotations
 import json
 import math
 import os
+
+# Import enhanced modules
+try:
+    from .issue_classifier import IssueClassifier, ResourceDimension
+    ENHANCED_SIZING_AVAILABLE = True
+except ImportError:
+    ENHANCED_SIZING_AVAILABLE = False
 
 CLOUDS = ["aws", "gcp", "azure"]
 SIZING_INTENTS = {"right_sizing", "cost_optimization"}
@@ -408,4 +418,97 @@ def build_sizing_recommendation(num_cores, mem_mb, sig_stats, ranked, cloud,
             "workload_caveat": workload_caveat,
         },
     })
+    return base
+
+
+def build_enhanced_sizing_recommendation(num_cores, mem_mb, sig_stats, ranked, cloud,
+                                         tables, provided_inputs, intent, healthcheck=None,
+                                         issue_classification=None, dependency_graph=None):
+    """
+    Enhanced sizing with dimension-specific recommendations (9.5-9.9 confidence target).
+
+    Integrates issue classification to provide precise recommendations:
+    - CAPACITY_LIMIT → Scale specific dimension (RAM/CPU/IOPS)
+    - WORKLOAD_INEFFICIENCY → Remediate before scaling
+    - CONFIGURATION_ISSUE → Reconfigure (drop indexes, tune settings)
+    - MIXED → Remediate first, then reassess
+    - OVER_PROVISIONED → Scale down safely
+
+    Returns enhanced sizing_recommendation with:
+    - dimension_recommendations: Per-dimension actions (RAM/CPU/Storage/IOPS)
+    - confidence_breakdown: Multi-factor confidence score
+    - action_priority: Ordered list of actions
+    """
+    # Start with base recommendation
+    base = build_sizing_recommendation(
+        num_cores, mem_mb, sig_stats, ranked, cloud, tables,
+        provided_inputs, intent, healthcheck
+    )
+
+    if not ENHANCED_SIZING_AVAILABLE or not issue_classification:
+        # Fallback to base recommendation
+        return base
+
+    # Extract issue classification
+    issue_type = issue_classification.issue_type.value
+    primary_dim = issue_classification.primary_dimension.value
+    recommendations = issue_classification.recommendations
+
+    # Build dimension-specific recommendations
+    dimension_recs = {}
+    for rec in recommendations:
+        dim = rec.dimension.value
+        dimension_recs[dim] = rec.to_dict()
+
+    # Prioritize actions
+    action_priority = []
+    for rec in sorted(recommendations, key=lambda r: r.confidence, reverse=True):
+        action_priority.append({
+            "priority": len(action_priority) + 1,
+            "dimension": rec.dimension.value,
+            "action": rec.action,
+            "confidence": round(rec.confidence, 3),
+            "summary": rec.rationale
+        })
+
+    # Generate executive summary
+    if issue_type == "capacity_limit":
+        exec_summary = (
+            f"Clear capacity limit in {primary_dim}. "
+            f"Scale up recommended with {recommendations[0].confidence:.1%} confidence."
+        )
+    elif issue_type == "workload_inefficiency":
+        exec_summary = (
+            "Workload inefficiency detected. Remediate queries/indexes before scaling "
+            f"(confidence: {recommendations[0].confidence:.1%})."
+        )
+    elif issue_type == "configuration_issue":
+        exec_summary = (
+            "Configuration issue detected. Reconfigure settings to free resources "
+            f"(confidence: {recommendations[0].confidence:.1%})."
+        )
+    elif issue_type == "mixed":
+        exec_summary = (
+            "Mixed issue: workload inefficiency amplifying capacity pressure. "
+            "Remediate first, then reassess."
+        )
+    elif issue_type == "over_provisioned":
+        exec_summary = (
+            f"System over-provisioned. Safe to scale down {primary_dim} "
+            f"(confidence: {recommendations[0].confidence:.1%})."
+        )
+    else:  # well_provisioned
+        exec_summary = "System well-provisioned. No action needed."
+
+    # Add enhanced fields to base recommendation
+    base["enhanced"] = {
+        "issue_classification": issue_type,
+        "primary_dimension": primary_dim,
+        "dimension_recommendations": dimension_recs,
+        "action_priority": action_priority,
+        "executive_summary": exec_summary,
+        "root_causes": issue_classification.root_causes,
+        "overall_confidence": round(issue_classification.confidence, 3),
+    }
+
     return base
