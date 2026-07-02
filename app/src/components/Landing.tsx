@@ -15,25 +15,19 @@ import {
   Loader2,
   Pencil,
   Play,
-  Settings2,
   Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { type RunHistoryEntry, historyEntryLabels } from "@/lib/ftdc";
 import {
-  type IntentDef,
   type InputRegistryEntry,
   DEFAULT_INPUT_REGISTRY,
   cachedInputRegistry,
-  cachedRulesetDump,
 } from "@/lib/ruleset";
-import { IntentPicker } from "@/components/AssessmentControls";
 import { RegistryCollectorHelp } from "@/components/CollectorHelp";
 import { type Baseline, classifyRun } from "@/lib/preflight";
 import { CLOUDS } from "@/lib/sizing";
-
-const SIZING_INTENTS = new Set(["right_sizing", "cost_optimization"]);
 
 interface Props {
   username: string;
@@ -58,7 +52,7 @@ interface Props {
 }
 
 type Phase = "entry" | "recent" | "wizard";
-const STEPS = ["Inputs", "Intent", "Mode", "Review"] as const;
+const STEPS = ["Inputs", "Cloud Provider", "Review"] as const;
 
 function InputSlot({
   icon,
@@ -178,7 +172,7 @@ function SummaryRow({
   label: string;
   value: React.ReactNode;
   muted?: boolean;
-  onEdit: () => void;
+  onEdit?: () => void;
 }) {
   return (
     <div className="flex items-start justify-between gap-3 rounded-lg border border-border bg-card px-3 py-2.5">
@@ -186,9 +180,11 @@ function SummaryRow({
         <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
         <div className={"truncate text-sm " + (muted ? "text-muted-foreground" : "font-medium")}>{value}</div>
       </div>
-      <button onClick={onEdit} className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-primary hover:underline">
-        <Pencil className="size-3" /> Edit
-      </button>
+      {onEdit && (
+        <button onClick={onEdit} className="flex shrink-0 items-center gap-1 text-[11px] font-medium text-primary hover:underline">
+          <Pencil className="size-3" /> Edit
+        </button>
+      )}
     </div>
   );
 }
@@ -202,34 +198,26 @@ export function Landing(props: Props) {
     onPickInput,
     onClearInput,
     intent,
-    onIntentChange,
     cloud,
     onCloudChange,
-    // assessmentMode removed
     model,
-    // onModelChange removed
     onRun,
     history,
     onSelectRecent,
     onDeleteEntry,
     onClearHistory,
-    onOpenLlmSettings,
   } = props;
 
   const [phase, setPhase] = useState<Phase>("entry");
   const [step, setStep] = useState(1);
   const [baseline, setBaseline] = useState<Baseline | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [intents, setIntents] = useState<IntentDef[]>([]);
   // Seed from the built-in default registry so the Inputs step paints INSTANTLY; the engine's
   // registry (which may carry operator overrides) hydrates over it non-blockingly. Never gated
   // on the sidecar spawn (Phase-9 fixed the registry-load stall by removing the first-paint gate).
   const [inputReg, setInputReg] = useState<InputRegistryEntry[]>(DEFAULT_INPUT_REGISTRY.inputs);
 
   useEffect(() => {
-    cachedRulesetDump()
-      .then((rs) => setIntents(rs.intents))
-      .catch(() => {});
     cachedInputRegistry()
       .then((r) => setInputReg(r.inputs))
       .catch(() => {});
@@ -250,7 +238,7 @@ export function Landing(props: Props) {
   const hasAnyInput = primaryInputs.length
     ? primaryInputs.some((e) => inputValues[e.id])
     : !!selectedPath || !!healthcheckPath;
-  const canNext = step === 1 ? hasAnyInput : step === 2 ? !!intent : true;
+  const canNext = step === 1 ? hasAnyInput : true;
   const plan = classifyRun(phase === "wizard" && baseline ? baseline : null, {
     ftdc: selectedPath,
     intent: intent ?? "full_sweep",
@@ -262,11 +250,6 @@ export function Landing(props: Props) {
     sh_status: inputValues.sh_status ?? null,
     rs_status: inputValues.rs_status ?? null,
   });
-  const intentIds = (intent ?? "").split(",").filter(Boolean);
-  const selectedIntents = intentIds
-    .map((id) => intents.find((i) => i.id === id))
-    .filter(Boolean) as IntentDef[];
-  const sizingIntent = intentIds.some((id) => SIZING_INTENTS.has(id));
 
   // Keyboard: Enter advances when valid (Run on Review).
   useEffect(() => {
@@ -275,8 +258,8 @@ export function Landing(props: Props) {
       if (e.key !== "Enter") return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "TEXTAREA" || tag === "SELECT" || tag === "INPUT") return;
-      if (step < 4 && canNext) setStep((s) => s + 1);
-      else if (step === 3 && !analyzing) onRun(baseline); // was step 4
+      if (step < 3 && canNext) setStep((s) => s + 1);
+      else if (step === 3 && !analyzing) onRun(baseline);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -291,7 +274,7 @@ export function Landing(props: Props) {
   function openRecent(entry: RunHistoryEntry) {
     const b = onSelectRecent(entry);
     setBaseline(b);
-    setStep(3); // Skip to review (was step 4, now 3)
+    setStep(3); // Skip to review
     setPhase("wizard");
   }
 
@@ -307,24 +290,13 @@ export function Landing(props: Props) {
 
   return (
     <div className="relative min-h-screen overflow-y-auto bg-background p-6 text-foreground">
-      {onOpenLlmSettings && (
-        <button
-          onClick={onOpenLlmSettings}
-          title="LLM Settings"
-          className="absolute right-4 top-4 flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
-        >
-          <Settings2 className="size-4" /> LLM
-        </button>
-      )}
-
       <div className="mx-auto w-full max-w-2xl space-y-6 py-8">
         {/* ENTRY */}
         {phase === "entry" && (
           <div className="space-y-6 duration-200 animate-in fade-in">
             {Header}
             <p className="mx-auto max-w-md text-center text-sm text-muted-foreground">
-              Analyze a MongoDB diagnostic.data capture — 100% local. Start a new guided analysis,
-              or reopen a recent one.
+              Analyze MongoDB Community Edition deployment for Atlas migration sizing — 100% local, deterministic analysis.
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <button
@@ -334,7 +306,7 @@ export function Landing(props: Props) {
                 <Play className="size-6 text-primary" />
                 <div className="mt-2 text-base font-semibold">New analysis</div>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Declare inputs, pick an intent and reasoning mode, then run.
+                  Upload FTDC data and healthcheck, get Atlas tier recommendations.
                 </p>
               </button>
               <button
@@ -477,39 +449,32 @@ export function Landing(props: Props) {
                 </section>
               )}
 
-              {/* Step 2 — Intent */}
+              {/* Step 2 — Cloud Provider */}
               {step === 2 && (
-                <section className="space-y-2">
-                  <h2 className="text-sm font-semibold">Step 2 · Assessment intent <span className="font-normal text-muted-foreground">— a lens over the categories</span></h2>
-                  <IntentPicker value={intent} onChange={onIntentChange} providedInputs={provided} />
-                  {sizingIntent && (
-                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-secondary/20 p-3">
-                      <span className="text-xs text-muted-foreground">Cloud provider (for tier sizing)</span>
-                      <div className="inline-flex rounded-md border border-border p-0.5">
-                        {CLOUDS.map((c) => (
-                          <button
-                            key={c.id}
-                            onClick={() => onCloudChange(c.id)}
-                            className={
-                              "rounded px-2.5 py-1 text-xs font-medium transition-colors " +
-                              (cloud === c.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary/50")
-                            }
-                          >
-                            {c.label}
-                          </button>
-                        ))}
-                      </div>
-                      <span className="text-[10px] text-muted-foreground">provisioned IOPS is AWS-only</span>
+                <section className="space-y-3">
+                  <h2 className="text-sm font-semibold">Step 2 · Cloud Provider <span className="font-normal text-muted-foreground">— for Atlas tier recommendations</span></h2>
+                  <p className="text-xs text-muted-foreground">Select your target Atlas cloud provider for tier and cost recommendations.</p>
+                  <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+                    <div className="inline-flex rounded-md border border-border p-1">
+                      {CLOUDS.map((c) => (
+                        <button
+                          key={c.id}
+                          onClick={() => onCloudChange(c.id)}
+                          className={
+                            "rounded px-6 py-2 text-sm font-medium transition-colors " +
+                            (cloud === c.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary/50")
+                          }
+                        >
+                          {c.label}
+                        </button>
+                      ))}
                     </div>
-                  )}
+                    <p className="text-[10px] text-muted-foreground">Note: Provisioned IOPS optimization is AWS-only</p>
+                  </div>
                 </section>
               )}
 
-              {/* Step 3 — Mode */}
-              {/* Step 3 removed */}
-              {/* Step 3 removed - mode selection eliminated */}
-
-              {/* Step 4 — Review */}
+              {/* Step 3 — Review */}
               {step === 3 && (
                 <section className="space-y-3">
                   <h2 className="text-sm font-semibold">Step 3 · Review</h2>
@@ -526,27 +491,14 @@ export function Landing(props: Props) {
                         <SummaryRow key={e.id} label={e.label} value={inputValues[e.id] as string} muted onEdit={() => setStep(1)} />
                       ))}
                     <SummaryRow
-                      label={selectedIntents.length > 1 ? "Assessment intents (union)" : "Assessment intent"}
-                      value={
-                        selectedIntents.length > 0 ? (
-                          <span>{selectedIntents.map((i) => i.title).join(" + ")}</span>
-                        ) : (
-                          <span className="text-muted-foreground">— none selected —</span>
-                        )
-                      }
-                      onEdit={() => setStep(2)}
+                      label="Analysis Type"
+                      value="Atlas Migration Sizing (Right-sizing + Cost Optimization)"
+                      muted
                     />
-                    {sizingIntent && (
-                      <SummaryRow
-                        label="Cloud provider"
-                        value={CLOUDS.find((c) => c.id === cloud)?.label ?? cloud}
-                        onEdit={() => setStep(2)}
-                      />
-                    )}
                     <SummaryRow
-                      label="Reasoning mode"
-                      value="Template-based narrative"
-                      onEdit={() => {/* mode removed */}}
+                      label="Cloud provider"
+                      value={CLOUDS.find((c) => c.id === cloud)?.label ?? cloud}
+                      onEdit={() => setStep(2)}
                     />
                   </div>
                   {/* Change-detection note (the action label, always visible) */}
@@ -573,7 +525,7 @@ export function Landing(props: Props) {
               >
                 <ArrowLeft className="size-4" /> Back
               </Button>
-              {step < 4 && (
+              {step < 3 && (
                 <Button size="sm" className="h-9 gap-1.5 text-xs" disabled={!canNext} onClick={() => setStep((s) => s + 1)}>
                   Next <ArrowRight className="size-4" />
                 </Button>

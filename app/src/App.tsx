@@ -331,12 +331,12 @@ export default function App() {
       return null;
     }
   });
-  // Pre-flight intake: assessment intent (lens) + optional input file paths.
+  // Pre-flight intake: fixed to CE → Atlas migration sizing (right-sizing + cost optimization)
   const [intent, setIntent] = useState<string>(() => {
     try {
-      return localStorage.getItem("ftdc.intent") || "full_sweep";
+      return localStorage.getItem("ftdc.intent") || "right_sizing,cost_optimization";
     } catch {
-      return "full_sweep";
+      return "right_sizing,cost_optimization";
     }
   });
   const [healthcheckPath, setHealthcheckPath] = useState<string | null>(null);
