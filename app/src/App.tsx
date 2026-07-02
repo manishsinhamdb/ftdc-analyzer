@@ -144,10 +144,7 @@ const NAV: {
   { label: "Migration Overview", view: "overview", icon: Gauge, tip: "Current system → Recommended Atlas tier configuration", needs: "ftdc" },
   { label: "Charts", view: "charts", icon: Activity, tip: "All metric charts grouped by category", needs: "ftdc" },
   { label: "Signals", view: "signals", icon: Database, tip: "Searchable table of every derived signal", needs: "ftdc" },
-  { label: "System", view: "system", icon: Server, tip: "Full host build, OS, and mongod config", needs: "ftdc" },
-  { label: "Healthcheck", view: "healthcheck", icon: ClipboardList, tip: "getMongoData report: server, collections, indexes, ops, security", needs: "healthcheck" },
   { label: "Explore", view: "explore", icon: Compass, tip: "Browse and chart any of the 1300+ raw metrics", needs: "ftdc" },
-  { label: "Methodology", view: "methodology", icon: SlidersHorizontal, tip: "View & tune the scoring ruleset: categories, signals, conditioning" },
 ];
 
 // OVERVIEW_CHART_TITLES, findChart removed - using MigrationOverview instead
