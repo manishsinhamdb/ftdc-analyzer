@@ -148,7 +148,6 @@ const NAV: {
   { label: "Healthcheck", view: "healthcheck", icon: ClipboardList, tip: "getMongoData report: server, collections, indexes, ops, security", needs: "healthcheck" },
   { label: "Explore", view: "explore", icon: Compass, tip: "Browse and chart any of the 1300+ raw metrics", needs: "ftdc" },
   { label: "Methodology", view: "methodology", icon: SlidersHorizontal, tip: "View & tune the scoring ruleset: categories, signals, conditioning" },
-  { label: "Assessment", view: "inference", icon: Sparkles, tip: "Detailed capacity analysis with evidence and recommendations" },
 ];
 
 // OVERVIEW_CHART_TITLES, findChart removed - using MigrationOverview instead
